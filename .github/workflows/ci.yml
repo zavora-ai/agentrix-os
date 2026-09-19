@@ -81,5 +81,5 @@ jobs:
         working-directory: spatial-os/..
 
       - name: Docker build
-        run: docker build -f spatial-os/Dockerfile -t zavora-os:ci .
+        run: docker build -f spatial-os/Dockerfile -t agentrix-os:ci .
         working-directory: spatial-os/..

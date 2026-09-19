@@ -23,7 +23,7 @@ pub struct VoiceStatus {
     pub ws_path: &'static str,
     pub input_rate_hz: u32,
     pub output_rate_hz: u32,
-    /// Camera channel available on this websocket (`ZAVORA_CAMERA`, needs voice).
+    /// Camera channel available on this websocket (`AGENTRIX_CAMERA`, needs voice).
     pub camera: bool,
 }
 

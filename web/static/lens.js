@@ -9,14 +9,14 @@
 (function () {
   'use strict';
 
-  const KEY = 'zavora_lens';
+  const KEY = 'agentrix_lens';
   const ORDER = ['work', 'both', 'home'];
   const TITLES = { work: 'Work World', home: 'Home World' };
 
   async function boot() {
-    if (window.__ZAVORA_BOOT__) await window.__ZAVORA_BOOT__;
-    if (window.__ZAVORA_DEMO__) return;
-    if (localStorage.getItem('zavora_p2') === '0') return;
+    if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
+    if (window.__AGENTRIX_DEMO__) return;
+    if (localStorage.getItem('agentrix_p2') === '0') return;
 
     const ctl = document.getElementById('lensCtl');
     const title = document.getElementById('worldTitle');
@@ -51,7 +51,7 @@
         /* private browsing */
       }
       if (record) {
-        window.__ZAVORA_LIVE__?.recordUiEvent?.('ui_lens', {
+        window.__AGENTRIX_LIVE__?.recordUiEvent?.('ui_lens', {
           domain: world === 'both' ? 'shared' : world,
         });
       }
@@ -65,7 +65,7 @@
     }
 
     // Other surfaces (camera gestures, M10-T5) drive the pager through this.
-    window.__ZAVORA_LENS__ = { step, set: (w) => set(w, true), current: () => current };
+    window.__AGENTRIX_LENS__ = { step, set: (w) => set(w, true), current: () => current };
 
     btns.forEach((b) => b.addEventListener('click', () => set(b.dataset.lens, true)));
 
@@ -136,5 +136,5 @@
     ctl.removeAttribute('hidden');
   }
 
-  boot().catch((err) => console.warn('[zavora] worlds pager boot failed', err));
+  boot().catch((err) => console.warn('[agentrix] worlds pager boot failed', err));
 })();

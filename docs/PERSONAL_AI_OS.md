@@ -1,6 +1,6 @@
-# Zavora Personal AI OS — Concept & Architecture
+# Agentrix Personal AI OS — Concept & Architecture
 
-**Working title:** Zavora OS · Phase 2 — "One coordinated life"
+**Working title:** Agentrix OS · Phase 2 — "One coordinated life"
 **Status:** Concept v1.0 (for review)
 **Date:** 2026-09-19
 **Baseline codebase:** [zavora-ai/zavora-os](https://github.com/zavora-ai/zavora-os) @ `228ec78` (2026-06-23) — Rust/Axum + adk-rust, Gemini, MCP toolservers, AWP
@@ -19,13 +19,13 @@
 | An AI researcher | §3, §7 Intelligence layer, §8 Personal baseline, §11 Memory architecture, §14 Agent-to-agent protocol |
 | A future user | §1, §9, §10, §11, §13 |
 
-Terminology: **Zavora OS** is the product that exists today (the `spatial-os` crate). **Personal AI OS** is the Phase 2 target described here. **Suzy** is the existing coordinator persona and remains the voice of the **Mother Agent**.
+Terminology: **Agentrix OS** is the product that exists today (the `spatial-os` crate). **Personal AI OS** is the Phase 2 target described here. **Suzy** is the existing coordinator persona and remains the voice of the **Mother Agent**.
 
 ---
 
 ## 0. Executive summary
 
-Zavora OS today is a working agentic prototype: a user speaks an intent, a Gemini-backed router picks one of seven scenarios (`morning`, `deck`, `lisbon`, `week`, `people`, `live`, `proactive`), a workflow of parallel and sequential sub-agents runs against real MCP toolservers (calendar, email, news, weather, Slack, CRM, banking, GitHub, maps, real estate, spreadsheets, documents, slides), and results bloom into spatial cards. Suzy summarizes. Three ambient agents work on a cron in the background. External agents can drive the same pipeline through the Agentic Web Protocol (AWP).
+Agentrix OS today is a working agentic prototype: a user speaks an intent, a Gemini-backed router picks one of seven scenarios (`morning`, `deck`, `lisbon`, `week`, `people`, `live`, `proactive`), a workflow of parallel and sequential sub-agents runs against real MCP toolservers (calendar, email, news, weather, Slack, CRM, banking, GitHub, maps, real estate, spreadsheets, documents, slides), and results bloom into spatial cards. Suzy summarizes. Three ambient agents work on a cron in the background. External agents can drive the same pipeline through the Agentic Web Protocol (AWP).
 
 Phase 2 turns that prototype into a **Personal AI Operating System**. The change is structural, not cosmetic:
 
@@ -73,11 +73,11 @@ An operating system does three things a chatbot does not: it **owns the context*
 5. **Never assume why.** The system reports what changed and offers to help review; it does not diagnose causes.
 6. **Least privilege everywhere.** Agents get only the tools and memory they need. Discovery ≠ exposure.
 7. **Human in control.** Every external action has a permission level; the user can pause everything with one switch.
-8. **Honest data.** No fabricated facts, no silent stubs — a rule Zavora OS already enforces in its greeting agent and labeled stubs.
+8. **Honest data.** No fabricated facts, no silent stubs — a rule Agentrix OS already enforces in its greeting agent and labeled stubs.
 9. **Memory is the user's.** Readable, editable, deletable, exportable, with provenance.
 10. **Health and money stay conservative.** Wellness agents organize and escalate; finance agents inform and never move money autonomously.
 
-### 1.4 What Zavora OS already proves
+### 1.4 What Agentrix OS already proves
 
 The current repository is a strong foundation, not a blank page:
 
@@ -764,7 +764,7 @@ Every tool in `mcp_allowlists.toml` gains an effect. The gate decides by effect,
 
 ### 10.3 Where the gate lives
 
-Zavora OS already wraps toolsets (`GeminiSanitizedToolset`, `FilteredToolset` in `src/agents/gemini.rs`). The permission gate is one more wrapper:
+Agentrix OS already wraps toolsets (`GeminiSanitizedToolset`, `FilteredToolset` in `src/agents/gemini.rs`). The permission gate is one more wrapper:
 
 ```
 LlmAgent ──▶ PermissionGate(agent_id, mode, effects) ──▶ FilteredToolset ──▶ MCP
@@ -1047,7 +1047,7 @@ Email Agent finds "Can we meet Thursday about the renewal?" from a client. Calen
 
 ### 13.6 Evening — "What have I been reading lately?"
 
-Reading & Knowledge answers from the knowledge graph: "Mostly Rust async runtimes and two long pieces on distributed consensus — five sessions this week, up from two. This connects to the 'Zavora runtime' project. Want a 10-minute summary of the consensus articles read aloud?" → Entertainment agent plays it (Suggest).
+Reading & Knowledge answers from the knowledge graph: "Mostly Rust async runtimes and two long pieces on distributed consensus — five sessions this week, up from two. This connects to the 'Agentrix runtime' project. Want a 10-minute summary of the consensus articles read aloud?" → Entertainment agent plays it (Suggest).
 
 ### 13.7 Granting more autonomy
 
@@ -1174,7 +1174,7 @@ productivity ──read_memory(work.routine)──▶ plans first focus block at
 
 ## Appendix A — Gap analysis against the current repository
 
-| Concept requirement | Status in `zavora-os` @ `228ec78` | Evidence | Phase 2 action |
+| Concept requirement | Status in `agentrix-os` @ `228ec78` | Evidence | Phase 2 action |
 |---|---|---|---|
 | Central orchestrator | **Partial** — router classifies, Suzy summarizes; no delegation/arbitration | `src/agents/router.rs`, `src/agents/suzy.rs`, `src/orchestrator/dispatch.rs` | S1 Mother Agent |
 | Work / Home separation | **Hint only** — People rail has work/family; background cards "People (work)", "Family (close)" | `src/rails/background.rs`, `src/rails/people.rs` | S0 domain model, S4/S5 worlds |
@@ -1276,7 +1276,7 @@ All existing events (`scenario`, `card_*`, `suzy_summary`, `suggest`, `conduct`,
 | **Recipe** | A user-approved rule that lets an agent run an effect automatically |
 | **Known / Assumed / Recommended** | The three kinds of memory the system may hold |
 | **MCP** | Model Context Protocol — how agents reach tools (calendar, email, …) |
-| **AWP** | Agentic Web Protocol — how external agents reach Zavora OS |
+| **AWP** | Agentic Web Protocol — how external agents reach Agentrix OS |
 | **VerbUI / Conducting** | Existing gesture language of the card field (fuse, fling, commit) |
 
 ---
@@ -1285,7 +1285,7 @@ All existing events (`scenario`, `card_*`, `suzy_summary`, `suggest`, `conduct`,
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
-│  ✦ Zavora OS         [ TODAY ]  [ FIELD ]  [ TRUST ]          lens: ● Both ○ Work ○ Home │
+│  ✦ Agentrix OS         [ TODAY ]  [ FIELD ]  [ TRUST ]          lens: ● Both ○ Work ○ Home │
 ├───────────────────────────────┬──────────────────────────────┬───────────────────────┤
 │  WORK  (blue)                 │  HOME  (green)               │  PEOPLE               │
 │  ▸ Priorities (3)             │  ▸ Family: dinner 18:30 🎂    │  work · family        │

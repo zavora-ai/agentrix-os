@@ -1,10 +1,10 @@
 /**
  * Mobile layout smoke — run with server up:
- *   ZAVORA_URL=http://127.0.0.1:9847 node scripts/smoke-mobile.mjs
+ *   AGENTRIX_URL=http://127.0.0.1:9847 node scripts/smoke-mobile.mjs
  */
 import { chromium, devices } from 'playwright';
 
-const base = (process.env.ZAVORA_URL || 'http://127.0.0.1:9847').replace(/\/$/, '');
+const base = (process.env.AGENTRIX_URL || 'http://127.0.0.1:9847').replace(/\/$/, '');
 const iPhone = devices['iPhone 13'];
 
 const browser = await chromium.launch({ headless: true });

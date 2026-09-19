@@ -43,9 +43,9 @@ pub fn phase1_agent_ids() -> Vec<&'static str> {
     HOME_AGENTS.iter().flat_map(|a| a.phase1_agents.iter().copied()).collect()
 }
 
-/// Runtime flag (`ZAVORA_HOME_MOTHER=0` disables).
+/// Runtime flag (`AGENTRIX_HOME_MOTHER=0` disables).
 pub fn enabled() -> bool {
-    !matches!(std::env::var("ZAVORA_HOME_MOTHER").as_deref(), Ok("0") | Ok("false") | Ok("off"))
+    !matches!(std::env::var("AGENTRIX_HOME_MOTHER").as_deref(), Ok("0") | Ok("false") | Ok("off"))
 }
 
 /// Fold the home targets into one [`WorldResult`] and add the Family, Personal and Personal Social

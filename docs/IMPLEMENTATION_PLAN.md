@@ -1,4 +1,4 @@
-# Zavora OS — Implementation Plan
+# Agentrix OS — Implementation Plan
 
 Tick boxes as you complete work. Merge to `main` only after the milestone **validation** section is fully checked.
 

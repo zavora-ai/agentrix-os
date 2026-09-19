@@ -1,7 +1,7 @@
-# Zavora OS — production image
+# Agentrix OS — production image
 #
 # Build from the parent directory so path deps resolve:
-#   cd .. && docker build -f spatial-os/Dockerfile -t zavora-os .
+#   cd .. && docker build -f spatial-os/Dockerfile -t agentrix-os .
 #
 # Expects sibling directories: adk-rust/, spatial-os/
 # Optional: mount MCP server binaries at runtime (see deploy/docker-compose.yml).

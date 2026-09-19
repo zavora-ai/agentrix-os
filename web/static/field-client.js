@@ -1,15 +1,15 @@
 /**
  * Live mode: consume POST /api/sessions/{id}/intent|action SSE and drive the field UI.
- * Offline demo uses legacy scenarios{} when ?demo=1 or localStorage zavora_demo=1.
+ * Offline demo uses legacy scenarios{} when ?demo=1 or localStorage agentrix_demo=1.
  */
 (function () {
   'use strict';
 
   async function boot() {
-    if (window.__ZAVORA_BOOT__) await window.__ZAVORA_BOOT__;
+    if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
 
-    const ui = window.__ZAVORA_UI__;
-    if (!ui || window.__ZAVORA_DEMO__) return;
+    const ui = window.__AGENTRIX_UI__;
+    if (!ui || window.__AGENTRIX_DEMO__) return;
 
     let sessionId = null;
     let abortController = null;
@@ -18,7 +18,7 @@
     const ACTION_RE =
       /\b(do it|combine|merge|fold|book|hold|reply|draft|reserve|apply|arrange|organi[sz]e|sort it|handle it|take care|read aloud|show me|reply to them)\b/i;
 
-    const SESSION_KEY = 'zavora_session_id';
+    const SESSION_KEY = 'agentrix_session_id';
 
     function rememberSession(id) {
       sessionId = id;
@@ -110,7 +110,7 @@
         cardOpenTs.set(card, now);
         queueUiEvent('ui_card_open', { domain: card.dataset.domain || 'shared' });
       });
-      window.addEventListener('zavora:field-event', (e) => {
+      window.addEventListener('agentrix:field-event', (e) => {
         const t = e.detail && e.detail.type;
         if (t === 'suzy_summary' || t === 'permission_request') queueUiEvent('ui_notification');
       });
@@ -133,7 +133,7 @@
         (data.agents || []).forEach((a) => {
           map[a.agent_id] = a.mode;
         });
-        window.__ZAVORA_MODES__ = map;
+        window.__AGENTRIX_MODES__ = map;
         if (ui.applyModeBadges) ui.applyModeBadges();
       } catch (_) {
         /* offline / not signed in */
@@ -151,7 +151,7 @@
       const text = (ev.detail?.args?.text || '').trim();
       if (!text) return;
       if (sid) rememberSession(sid);
-      window.__ZAVORA_LIVE__?.submit?.(text);
+      window.__AGENTRIX_LIVE__?.submit?.(text);
     }
 
     async function apiSnooze(title, glyph, agent) {
@@ -291,7 +291,7 @@
     function handleEvent(ev, intentText) {
       // Phase 2 surfaces (chat panel, approvals inbox) observe the same stream.
       try {
-        window.dispatchEvent(new CustomEvent('zavora:field-event', { detail: ev }));
+        window.dispatchEvent(new CustomEvent('agentrix:field-event', { detail: ev }));
       } catch (_) {
         /* never let listeners break orchestration */
       }
@@ -353,7 +353,7 @@
           }
           break;
         case 'error':
-          console.warn('[zavora] orchestration error', ev.message);
+          console.warn('[agentrix] orchestration error', ev.message);
           if (ui.showSuzyCustom) ui.showSuzyCustom(ev.message || 'Something went wrong.');
           break;
         case 'suzy_summary':
@@ -460,11 +460,11 @@
       await consumeSse(res, trimmed);
     }
 
-    window.__ZAVORA_LIVE__ = {
+    window.__AGENTRIX_LIVE__ = {
       submit(text) {
         submitLive(text).catch((err) => {
           if (err.name === 'AbortError') return;
-          console.error('[zavora] live intent failed', err);
+          console.error('[agentrix] live intent failed', err);
           const msg = `Could not reach the server — ${err.message || 'try again'}.`;
           if (ui.showSuzyCustom) ui.showSuzyCustom(msg);
           else alert(msg);
@@ -484,12 +484,12 @@
 
     wirePersistence();
     wireUiSignals();
-    window.addEventListener('zavora:voice-intent', onVoiceIntent);
+    window.addEventListener('agentrix:voice-intent', onVoiceIntent);
     initSession()
       .catch(() => ensureSession().catch(() => {}))
       .then(() => fetchModes());
-    console.info('[zavora] live mode — SSE orchestration + persistence enabled');
+    console.info('[agentrix] live mode — SSE orchestration + persistence enabled');
   }
 
-  boot().catch((err) => console.warn('[zavora] field-client boot failed', err));
+  boot().catch((err) => console.warn('[agentrix] field-client boot failed', err));
 })();

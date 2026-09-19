@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let ledger_key = std::env::var("LEDGER_HASH_KEY")
         .ok()
         .filter(|k| !k.is_empty())
-        .unwrap_or_else(|| "zavora-ledger-dev-key".into())
+        .unwrap_or_else(|| "agentrix-ledger-dev-key".into())
         .into_bytes();
     let services = match pg_pool.clone() {
         Some(pool) => spatial_os::permissions::PermissionServices::with_postgres(pool, ledger_key),
@@ -491,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = config.addr();
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("Zavora OS listening on http://{addr}");
+    tracing::info!("Agentrix OS listening on http://{addr}");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -528,7 +528,7 @@ async fn boot_deck_stack(
 
     let deck_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os")
+            .app_name("agentrix-os")
             .agent(workflow)
             .session_service(session_service.clone())
             .build()?,
@@ -536,7 +536,7 @@ async fn boot_deck_stack(
 
     let combine_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-combine")
+            .app_name("agentrix-os-combine")
             .agent(combine_agent)
             .session_service(session_service)
             .build()?,
@@ -591,7 +591,7 @@ async fn boot_morning_stack(
 
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-morning")
+            .app_name("agentrix-os-morning")
             .agent(workflow)
             .session_service(session_service)
             .build()?,
@@ -612,7 +612,7 @@ async fn boot_mother_stack(
     let agent = spatial_os::mother::agent::build(api_key, &config.gemini_model, sessions).await?;
     Ok(Arc::new(
         Runner::builder()
-            .app_name("zavora-os-mother")
+            .app_name("agentrix-os-mother")
             .agent(agent)
             .session_service(session_service)
             .build()?,
@@ -634,7 +634,7 @@ async fn boot_coordinator_stack(
 
     let router_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-router")
+            .app_name("agentrix-os-router")
             .agent(router_agent)
             .session_service(session_service.clone())
             .build()?,
@@ -642,7 +642,7 @@ async fn boot_coordinator_stack(
 
     let suzy_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-suzy")
+            .app_name("agentrix-os-suzy")
             .agent(suzy_agent)
             .session_service(session_service)
             .build()?,
@@ -676,7 +676,7 @@ async fn boot_live_stack(
     let workflow = live::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-live")
+            .app_name("agentrix-os-live")
             .agent(workflow)
             .session_service(session_service)
             .build()?,
@@ -712,7 +712,7 @@ async fn boot_people_stack(
     let workflow = people::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-people")
+            .app_name("agentrix-os-people")
             .agent(workflow)
             .session_service(session_service)
             .build()?,
@@ -746,7 +746,7 @@ async fn boot_week_stack(
     let workflow = week::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-week")
+            .app_name("agentrix-os-week")
             .agent(workflow)
             .session_service(session_service)
             .build()?,
@@ -768,7 +768,7 @@ async fn boot_greeting_stack(
 
     session_service
         .create(CreateRequest {
-            app_name: "zavora-os-greeting".into(),
+            app_name: "agentrix-os-greeting".into(),
             user_id: "greeting-user".into(),
             session_id: Some("greeting-session".into()),
             state: Default::default(),
@@ -777,7 +777,7 @@ async fn boot_greeting_stack(
 
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-greeting")
+            .app_name("agentrix-os-greeting")
             .agent(agent)
             .session_service(session_service)
             .build()?,
@@ -846,7 +846,7 @@ async fn boot_lisbon_stack(
     let workflow = lisbon::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-os-lisbon")
+            .app_name("agentrix-os-lisbon")
             .agent(workflow)
             .session_service(session_service)
             .build()?,

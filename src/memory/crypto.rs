@@ -34,7 +34,7 @@ impl Crypto {
             .filter(|k| !k.is_empty())
             .unwrap_or_else(|| {
                 tracing::warn!("MEMORY_MASTER_KEY unset — using a development key; set it before storing real data");
-                "zavora-dev-memory-master-key".into()
+                "agentrix-dev-memory-master-key".into()
             });
         Self::from_master(&material)
     }

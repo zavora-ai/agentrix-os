@@ -160,7 +160,7 @@ impl LedgerService {
 
     /// In-memory only (tests, no DATABASE_URL).
     pub fn in_memory() -> Self {
-        Self::new(None, b"zavora-ledger-dev-key".to_vec())
+        Self::new(None, b"agentrix-ledger-dev-key".to_vec())
     }
 
     pub fn postgres_enabled(&self) -> bool {

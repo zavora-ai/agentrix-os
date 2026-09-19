@@ -4,7 +4,7 @@
  * in the field while the synthesized reply lands in the transcript. GET on the same route
  * hydrates history after a refresh. Starter chips seed the first turn; `suggest` events
  * from the stream become tappable follow-ups. Live mode only; disable with
- * localStorage zavora_p2=0.
+ * localStorage agentrix_p2=0.
  */
 (function () {
   'use strict';
@@ -16,9 +16,9 @@
   ];
 
   async function boot() {
-    if (window.__ZAVORA_BOOT__) await window.__ZAVORA_BOOT__;
-    if (window.__ZAVORA_DEMO__) return;
-    if (localStorage.getItem('zavora_p2') === '0') return;
+    if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
+    if (window.__AGENTRIX_DEMO__) return;
+    if (localStorage.getItem('agentrix_p2') === '0') return;
 
     const openBtn = document.getElementById('chatOpen');
     const panel = document.getElementById('chatPanel');
@@ -80,7 +80,7 @@
     async function hydrate() {
       if (hydrated) return;
       hydrated = true;
-      const live = window.__ZAVORA_LIVE__;
+      const live = window.__AGENTRIX_LIVE__;
       try {
         await live?.ensureSession?.();
         const sid = live?.getSessionId?.();
@@ -99,7 +99,7 @@
     async function send(text) {
       const trimmed = (text || '').trim();
       if (!trimmed || inFlight) return;
-      const live = window.__ZAVORA_LIVE__;
+      const live = window.__AGENTRIX_LIVE__;
       if (!live || !live.chat) {
         clearEmpty();
         turnEl('mother', 'Live orchestration is unavailable — check your connection.');
@@ -151,7 +151,7 @@
     });
 
     // The reply (and any follow-up suggestion) arrives on the shared event stream.
-    window.addEventListener('zavora:field-event', (e) => {
+    window.addEventListener('agentrix:field-event', (e) => {
       if (!inFlight) return;
       const ev = e.detail || {};
       if (ev.type === 'suzy_summary') {
@@ -175,5 +175,5 @@
     openBtn.removeAttribute('hidden');
   }
 
-  boot().catch((err) => console.warn('[zavora] mother-chat boot failed', err));
+  boot().catch((err) => console.warn('[agentrix] mother-chat boot failed', err));
 })();

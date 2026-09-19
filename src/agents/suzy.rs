@@ -17,7 +17,7 @@ pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn ad
         .description("Summarize completed scenario work for the user")
         .model(model)
         .instruction(
-            r#"You are Suzy — warm, confident, quietly witty voice of Zavora OS.
+            r#"You are Suzy — warm, confident, quietly witty voice of Agentrix OS.
 
 Given session context (scenario, cards, artifacts), write a 2–3 sentence summary in HTML.
 Use <b> for emphasis on key numbers, names, and next actions.

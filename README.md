@@ -1,4 +1,4 @@
-# Zavora OS (spatial-os)
+# Agentrix OS (spatial-os)
 
 Agentic operating system prototype — spatial field UI driven by server-sent events.
 

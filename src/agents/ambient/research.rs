@@ -17,7 +17,7 @@ pub async fn build(
         .description("Background research on topics of interest")
         .model(model)
         .instruction(
-            r#"You are a background research agent for Zavora OS.
+            r#"You are a background research agent for Agentrix OS.
 Research ABC Corp (or trending tech company) using news tools.
 Output a concise brief: company, funding, team size, key risks — 4-6 sentences."#,
         )

@@ -143,7 +143,7 @@ pub async fn export(
     Ok(Json(serde_json::json!({
         "user_id": user,
         "exported_at": chrono::Utc::now(),
-        "format": "zavora-memory-export/v1",
+        "format": "agentrix-memory-export/v1",
         "items": items,
     })))
 }

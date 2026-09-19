@@ -17,7 +17,7 @@ pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn ad
         .description("Composes a personalized one- or two-sentence greeting from verified integration facts")
         .model(model)
         .instruction(
-            r#"You are Suzy — the voice of Zavora OS at session open.
+            r#"You are Suzy — the voice of Agentrix OS at session open.
 
 You receive INTEGRATION_FACTS as JSON. Write exactly 1–2 sentences of plain text (no HTML, no markdown).
 

@@ -1,4 +1,4 @@
-# Zavora Personal AI OS — Sprint Plan (Phase 2)
+# Agentrix Personal AI OS — Sprint Plan (Phase 2)
 
 **Companion to:** [`PERSONAL_AI_OS.md`](./PERSONAL_AI_OS.md) (concept & architecture)
 **Baseline:** [zavora-ai/zavora-os](https://github.com/zavora-ai/zavora-os) @ `228ec78`

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Zavora OS - The Agentic OS that works while you live</title>
+<title>Agentrix OS - The Agentic OS that works while you live</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32" />
 <link rel="shortcut icon" href="/favicon.ico" />
@@ -754,7 +754,7 @@
           <circle cx="35" cy="28" r="2.6" fill="#25d0c0"/>
           <circle cx="5" cy="28" r="2.6" fill="#ff7eb6"/>
         </svg>
-        <span class="gwm">ZAVORA<b>OS</b></span>
+        <span class="gwm">AGENTRIX<b>OS</b></span>
       </div>
       <div class="clock" id="clock"></div>
       <h2 class="greet-salute">Good morning</h2>
@@ -843,7 +843,7 @@
       <circle cx="35" cy="28" r="2.6" fill="#25d0c0"/>
       <circle cx="5"  cy="28" r="2.6" fill="#ff7eb6"/>
     </svg>
-    <span class="wm">ZAVORA<b>OS</b></span>
+    <span class="wm">AGENTRIX<b>OS</b></span>
     <span class="tag">The OS that works while you live</span>
   </div>
   <button class="ea-btn" id="eaOpen">Get early access</button>
@@ -854,7 +854,7 @@
       <button class="ea-x" id="eaClose" aria-label="Close">×</button>
       <h2>Get early access</h2>
       <p>Your next computer won't have apps — just say what you want, and agents do it for you.
-         Zavora OS opens to the first members on <b>June 30, 2026</b>.</p>
+         Agentrix OS opens to the first members on <b>June 30, 2026</b>.</p>
       <form id="eaForm">
         <input id="eaEmail" type="email" required placeholder="you@email.com" autocomplete="email" />
         <button type="submit" class="btn primary">Reserve my spot →</button>
@@ -877,12 +877,12 @@ let SIGNUP_ENDPOINT = 'https://formspree.io/f/xwvzgbee';
 let LINKEDIN_CONVERSION_ID = 28504817;
 let LINKEDIN_PARTNER_ID = '10281097';
 
-window.__ZAVORA_DEMO__ =
+window.__AGENTRIX_DEMO__ =
   new URLSearchParams(location.search).get('demo') === '1' ||
-  localStorage.getItem('zavora_demo') === '1';
-if (window.__ZAVORA_DEMO__) document.getElementById('demoBanner')?.removeAttribute('hidden');
+  localStorage.getItem('agentrix_demo') === '1';
+if (window.__AGENTRIX_DEMO__) document.getElementById('demoBanner')?.removeAttribute('hidden');
 
-window.__ZAVORA_BOOT__ = (async () => {
+window.__AGENTRIX_BOOT__ = (async () => {
   try {
     const res = await fetch('/api/public-config');
     if (!res.ok) return;
@@ -890,16 +890,16 @@ window.__ZAVORA_BOOT__ = (async () => {
     if (cfg.signup_endpoint) SIGNUP_ENDPOINT = cfg.signup_endpoint;
     if (cfg.linkedin_conversion_id) LINKEDIN_CONVERSION_ID = cfg.linkedin_conversion_id;
     if (cfg.linkedin_partner_id) LINKEDIN_PARTNER_ID = cfg.linkedin_partner_id;
-    if (window.__ZAVORA_DEMO__ && !cfg.allow_demo_mode && !__isLocalHost()) {
-      window.__ZAVORA_DEMO__ = false;
-      localStorage.removeItem('zavora_demo');
+    if (window.__AGENTRIX_DEMO__ && !cfg.allow_demo_mode && !__isLocalHost()) {
+      window.__AGENTRIX_DEMO__ = false;
+      localStorage.removeItem('agentrix_demo');
       const banner = document.getElementById('demoBanner');
       if (banner) {
         banner.removeAttribute('hidden');
         banner.innerHTML = '<b>Demo mode disabled</b> on this host — live orchestration only.';
       }
     }
-    if (cfg.uses_mock_orchestration && !window.__ZAVORA_DEMO__) {
+    if (cfg.uses_mock_orchestration && !window.__AGENTRIX_DEMO__) {
       const banner = document.getElementById('demoBanner');
       if (banner) {
         banner.removeAttribute('hidden');
@@ -910,7 +910,7 @@ window.__ZAVORA_BOOT__ = (async () => {
 })();
 
 async function hydrateAuthPill() {
-  if (window.__ZAVORA_DEMO__) return;
+  if (window.__AGENTRIX_DEMO__) return;
   const pill = document.getElementById('authPill');
   if (!pill) return;
   try {
@@ -1096,7 +1096,7 @@ function launch(text){
 }
 
 // ---------- Phase 2 (S4-T8): domain colour + permission mode badge ----------
-// Modes arrive from GET /api/permissions (field-client.js sets window.__ZAVORA_MODES__).
+// Modes arrive from GET /api/permissions (field-client.js sets window.__AGENTRIX_MODES__).
 // Badges render only for agents we can match to an allowlist id — never guessed.
 const MODE_BADGES = {
   observe:  { icon: '👁', label: 'Observe — reads and reports only' },
@@ -1112,7 +1112,7 @@ const AGENT_ALLOWLIST_IDS = {
 };
 function allowlistIdFor(agent, title){
   if (!agent) return null;
-  const modes = window.__ZAVORA_MODES__ || {};
+  const modes = window.__AGENTRIX_MODES__ || {};
   if (agent === 'news.agent') return title === 'Headlines' ? 'headlines_agent' : 'brief_agent';
   if (AGENT_ALLOWLIST_IDS[agent]) return AGENT_ALLOWLIST_IDS[agent];
   const guess = agent.replace(/\.agent$/, '') + '_agent';
@@ -1120,7 +1120,7 @@ function allowlistIdFor(agent, title){
   return modes[agent] ? agent : null;
 }
 function applyModeBadge(el, agent, title){
-  const modes = window.__ZAVORA_MODES__;
+  const modes = window.__AGENTRIX_MODES__;
   if (!modes) return;
   const id = allowlistIdFor(agent, title);
   const badge = id && MODE_BADGES[modes[id]];
@@ -1688,7 +1688,7 @@ function startSpeechFallback(){
   };
 }
 mic.addEventListener('click', async () => {
-  const live = window.ZavoraLiveVoice;
+  const live = window.AgentrixLiveVoice;
   if (live?.isActive?.()) {
     live.stop();
     mic.classList.remove('listening');
@@ -1699,7 +1699,7 @@ mic.addEventListener('click', async () => {
   if (live?.isEnabled?.()) {
     mic.classList.add('listening');
     input.placeholder = 'Suzy is listening…';
-    const sid = sessionStorage.getItem('zavora_session_id');
+    const sid = sessionStorage.getItem('agentrix_session_id');
     const ok = await live.start({
       sessionId: sid,
       onTranscript: (t) => { if (t.trim()) input.value = t.trim(); },
@@ -1715,16 +1715,16 @@ mic.addEventListener('click', async () => {
 const cam = document.getElementById('cam');
 (async () => {
   if (!cam) return;
-  if (window.__ZAVORA_BOOT__) await window.__ZAVORA_BOOT__;
-  if (window.__ZAVORA_DEMO__) return;
+  if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
+  if (window.__AGENTRIX_DEMO__) return;
   // live-voice.js is loaded after this inline script; wait for it.
-  for (let i = 0; i < 50 && !window.ZavoraLiveVoice; i++) await new Promise(r => setTimeout(r, 100));
-  const live = window.ZavoraLiveVoice;
+  for (let i = 0; i < 50 && !window.AgentrixLiveVoice; i++) await new Promise(r => setTimeout(r, 100));
+  const live = window.AgentrixLiveVoice;
   await live?.probe?.();
   if (live?.isCameraEnabled?.()) cam.removeAttribute('hidden');
 })();
 cam?.addEventListener('click', async () => {
-  const live = window.ZavoraLiveVoice;
+  const live = window.AgentrixLiveVoice;
   if (!live?.isCameraEnabled?.()) return;
   if (live.isCameraActive()) {
     live.stopCamera();
@@ -1793,7 +1793,7 @@ function renderPeopleRail(work, family, message) {
     : empty('No family contacts');
 }
 async function hydratePeopleRail() {
-  if (window.__ZAVORA_DEMO__) {
+  if (window.__AGENTRIX_DEMO__) {
     renderPeopleRail(demoPeople.work, demoPeople.family);
     return demoPeople;
   }
@@ -1848,7 +1848,7 @@ function wireAmbientStream() {
   } catch (_) {}
 }
 async function hydrateProactiveRail() {
-  if (window.__ZAVORA_DEMO__) {
+  if (window.__AGENTRIX_DEMO__) {
     applyProactiveAgents(demoProactiveAgents.map((a, i) => ({
       id: ['research','scout','maker'][i], glyph: a.glyph, name: a.name, task: a.tasks[0], status: 'idle',
     })));
@@ -1887,7 +1887,7 @@ function liveSlideHtml(s) {
 function renderLiveFeed(slides) {
   liveSlides = slides || [];
   if (!liveSlides.length) {
-    const msg = window.__ZAVORA_DEMO__
+    const msg = window.__AGENTRIX_DEMO__
       ? 'Demo headlines unavailable'
       : 'No headlines — connect mcp-news';
     lfTrack.innerHTML = `<div class="lf-slide"><div class="lf-body" style="color:var(--muted);padding-top:24px">${msg}</div></div>`;
@@ -1913,7 +1913,7 @@ function lfAuto() {
   if (liveSlides.length > 1) lfTimer = setInterval(() => lfGo(lfIdx + 1), 4200);
 }
 async function hydrateLiveFeed() {
-  if (window.__ZAVORA_DEMO__) {
+  if (window.__AGENTRIX_DEMO__) {
     renderLiveFeed(demoLiveSlides);
     return demoLiveSlides;
   }
@@ -1993,7 +1993,7 @@ function buildDemoBgCards(people, slides) {
   return cards;
 }
 async function hydrateBgCards(peopleData, liveData) {
-  if (window.__ZAVORA_DEMO__) {
+  if (window.__AGENTRIX_DEMO__) {
     mountBgCards(buildDemoBgCards(peopleData || demoPeople, liveData || demoLiveSlides));
     return;
   }
@@ -2235,7 +2235,7 @@ function greetingAudioUrl() {
   return clip.startsWith('/') ? clip : `/audio/${clip}`;
 }
 async function fetchGreetingPayload() {
-  if (window.__ZAVORA_DEMO__) {
+  if (window.__AGENTRIX_DEMO__) {
     greetingPayload = {
       salutation: salutationForHour(),
       full_text: `${salutationForHour()}. ${GREETING_FALLBACK.full_text}`,
@@ -2264,7 +2264,7 @@ async function playGreeting(){
   greetCC.innerHTML = words.map(w => `<span class="w">${w}</span>`).join(' ');
   greetCC.classList.add('show');
   const spans = [...greetCC.querySelectorAll('.w')];
-  const live = window.ZavoraLiveVoice;
+  const live = window.AgentrixLiveVoice;
   if (live?.isEnabled?.()) {
     const liveOk = await live.speakText(caption);
     if (liveOk) {
@@ -2447,7 +2447,7 @@ const eaModal = document.getElementById('eaModal');
 const eaForm = document.getElementById('eaForm');
 const eaDone = document.getElementById('eaDone');
 // Set this to your form endpoint (Formspree/Getform/etc.) to collect emails for real.
-// SIGNUP_ENDPOINT + LinkedIn IDs loaded from /api/public-config (see __ZAVORA_BOOT__)
+// SIGNUP_ENDPOINT + LinkedIn IDs loaded from /api/public-config (see __AGENTRIX_BOOT__)
 // capture campaign params so signups are attributable (e.g. ?utm_source=linkedin)
 const utm = (() => {
   const p = new URLSearchParams(location.search), o = {};
@@ -2474,8 +2474,8 @@ eaForm.addEventListener('submit', async e => {
         body: JSON.stringify({ email, ...utm }) });
       ok = res.ok;
     } else {
-      const list = JSON.parse(localStorage.getItem('zavora_signups') || '[]');
-      list.push({ email, ts: Date.now() }); localStorage.setItem('zavora_signups', JSON.stringify(list));
+      const list = JSON.parse(localStorage.getItem('agentrix_signups') || '[]');
+      list.push({ email, ts: Date.now() }); localStorage.setItem('agentrix_signups', JSON.stringify(list));
     }
   } catch (_) { ok = false; }
   if (!ok) {
@@ -2497,7 +2497,7 @@ document.getElementById('eaShare').addEventListener('click', e => {
 
 // ---- live mode bridge (field-client.js) ----
 const __legacySubmitIntent = submitIntent;
-window.__ZAVORA_UI__ = {
+window.__AGENTRIX_UI__ = {
   chips,
   suzy,
   origin,
@@ -2540,16 +2540,16 @@ window.__ZAVORA_UI__ = {
     suzyText.innerHTML = html;
     suzy.classList.add('show');
     speak(audioClip || suzyText.textContent);
-    if (window.__ZAVORA_DEMO__) {
+    if (window.__AGENTRIX_DEMO__) {
       setTimeout(() => armSuggestion(actionPrompt[currentKey]), 1600);
     }
   },
 };
 
 submitIntent = function (text) {
-  if (window.__ZAVORA_DEMO__) return __legacySubmitIntent(text);
-  if (window.__ZAVORA_LIVE__?.submit) return window.__ZAVORA_LIVE__.submit(text);
-  window.__ZAVORA_UI__?.showSuzyCustom?.('Live orchestration is unavailable — check your connection.');
+  if (window.__AGENTRIX_DEMO__) return __legacySubmitIntent(text);
+  if (window.__AGENTRIX_LIVE__?.submit) return window.__AGENTRIX_LIVE__.submit(text);
+  window.__AGENTRIX_UI__?.showSuzyCustom?.('Live orchestration is unavailable — check your connection.');
 };
 
 </script>

@@ -219,9 +219,9 @@ pub async fn boot(
         });
 
     for (sid, app) in [
-        ("ambient-research", "zavora-ambient-research"),
-        ("ambient-scout", "zavora-ambient-scout"),
-        ("ambient-maker", "zavora-ambient-maker"),
+        ("ambient-research", "agentrix-ambient-research"),
+        ("ambient-scout", "agentrix-ambient-scout"),
+        ("ambient-maker", "agentrix-ambient-maker"),
     ] {
         session_service
             .create(CreateRequest {
@@ -245,21 +245,21 @@ pub async fn boot(
 
     let research_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-ambient-research")
+            .app_name("agentrix-ambient-research")
             .agent(research_agent.clone())
             .session_service(session_service.clone())
             .build()?,
     );
     let scout_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-ambient-scout")
+            .app_name("agentrix-ambient-scout")
             .agent(scout_agent.clone())
             .session_service(session_service.clone())
             .build()?,
     );
     let maker_runner = Arc::new(
         Runner::builder()
-            .app_name("zavora-ambient-maker")
+            .app_name("agentrix-ambient-maker")
             .agent(maker_agent.clone())
             .session_service(session_service)
             .build()?,

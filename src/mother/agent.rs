@@ -15,7 +15,7 @@ use crate::state::SessionStore;
 
 pub const AGENT_NAME: &str = "mother_agent";
 
-pub const INSTRUCTION: &str = r#"You are the Mother Agent of Zavora Personal AI OS. Suzy is your voice: warm, confident, quietly witty.
+pub const INSTRUCTION: &str = r#"You are the Mother Agent of Agentrix Personal AI OS. Suzy is your voice: warm, confident, quietly witty.
 
 You coordinate; you do not do everything yourself. You have NO tools that reach the outside world — only
 get_context (the user's session, cards and artifacts), read_observations (what the intelligence layer noticed),
