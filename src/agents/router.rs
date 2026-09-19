@@ -59,7 +59,7 @@ pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn ad
     let model = Arc::new(GeminiModel::new(api_key, model_name)?);
 
     let mut builder = LlmConditionalAgent::builder("intent_router", model)
-        .description("Routes user intent to a Zavora scenario")
+        .description("Routes user intent to an Agentrix scenario")
         .instruction(
             r#"Classify the user's intent into exactly one scenario:
 - deck: pitch decks, presentations, slides, spreadsheets, documents, reports

@@ -51,10 +51,10 @@ pub fn phase1_agent_ids() -> Vec<&'static str> {
     WORK_AGENTS.iter().flat_map(|a| a.phase1_agents.iter().copied()).collect()
 }
 
-/// Runtime flag (`ZAVORA_WORK_MOTHER=0` disables): the old direct fan-out stays available until
+/// Runtime flag (`AGENTRIX_WORK_MOTHER=0` disables): the old direct fan-out stays available until
 /// the R2 validation passes (docs/PROGRESS.md §8).
 pub fn enabled() -> bool {
-    !matches!(std::env::var("ZAVORA_WORK_MOTHER").as_deref(), Ok("0") | Ok("false") | Ok("off"))
+    !matches!(std::env::var("AGENTRIX_WORK_MOTHER").as_deref(), Ok("0") | Ok("false") | Ok("off"))
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-//! Validation suite for Zavora OS M1 deck stack.
+//! Validation suite for Agentrix OS M1 deck stack.
 //!
 //! Run: `cargo test --test validate`
 //! Full E2E (slow, uses Gemini + MCP): `cargo test --test validate deck_workflow -- --ignored`
@@ -365,7 +365,7 @@ fn voice_state_camera_follows_voice_and_flag() {
     common::load_env();
     let config = AppConfig::from_env().expect("config");
     let voice = spatial_os::voice::VoiceState::boot(&config);
-    assert_eq!(voice.camera, voice.enabled && config.camera_enabled, "camera needs voice and ZAVORA_CAMERA");
+    assert_eq!(voice.camera, voice.enabled && config.camera_enabled, "camera needs voice and AGENTRIX_CAMERA");
 
     // What the client relies on exists whether or not a key is configured.
     assert!(spatial_os::routes::events::UI_KINDS.contains(&"ui_gesture"), "content-free gesture rows");
@@ -464,9 +464,9 @@ async fn awp_manifest_lists_submit_intent() {
 }
 
 #[tokio::test]
-#[ignore = "set ZAVORA_DEPLOY_URL=https://your-host to run production AWP conformance"]
+#[ignore = "set AGENTRIX_DEPLOY_URL=https://your-host to run production AWP conformance"]
 async fn awp_conformance_against_deploy_url() {
-    let base = std::env::var("ZAVORA_DEPLOY_URL").expect("ZAVORA_DEPLOY_URL");
+    let base = std::env::var("AGENTRIX_DEPLOY_URL").expect("AGENTRIX_DEPLOY_URL");
     let client = reqwest::Client::new();
     let doc: serde_json::Value = client
         .get(format!("{base}/.well-known/awp.json"))
@@ -811,7 +811,7 @@ async fn ui_session_persists_across_store_instances() {
 async fn artifact_paths_are_user_scoped() {
     use spatial_os::artifacts;
 
-    let root = std::path::Path::new("/tmp/zavora-artifacts");
+    let root = std::path::Path::new("/tmp/agentrix-artifacts");
     let user = "user-1";
     let session = "sess-1";
     let dir = artifacts::session_dir(root, user, session);
@@ -835,7 +835,7 @@ async fn pg_agent_session_roundtrip() {
     let user_id = uuid::Uuid::new_v4().to_string();
 
     svc.create(CreateRequest {
-        app_name: "zavora-os-validate".into(),
+        app_name: "agentrix-os-validate".into(),
         user_id: user_id.clone(),
         session_id: Some(session_id.clone()),
         state: Default::default(),
@@ -845,7 +845,7 @@ async fn pg_agent_session_roundtrip() {
 
     let loaded = svc
         .get(GetRequest {
-            app_name: "zavora-os-validate".into(),
+            app_name: "agentrix-os-validate".into(),
             user_id,
             session_id,
             num_recent_events: None,
@@ -854,7 +854,7 @@ async fn pg_agent_session_roundtrip() {
         .await
         .expect("get agent session");
 
-    assert_eq!(loaded.app_name(), "zavora-os-validate");
+    assert_eq!(loaded.app_name(), "agentrix-os-validate");
 }
 
 #[tokio::test]
@@ -988,7 +988,7 @@ async fn deck_workflow_writes_three_artifacts() {
 
     let session_service = Arc::new(InMemorySessionService::new());
     let runner = Runner::builder()
-        .app_name("zavora-os-validate")
+        .app_name("agentrix-os-validate")
         .agent(workflow)
         .session_service(session_service.clone())
         .build()
@@ -998,7 +998,7 @@ async fn deck_workflow_writes_three_artifacts() {
     let user_id = uuid::Uuid::new_v4().to_string();
     session_service
         .create(CreateRequest {
-            app_name: "zavora-os-validate".into(),
+            app_name: "agentrix-os-validate".into(),
             user_id: user_id.clone(),
             session_id: Some(session_id.clone()),
             state: Default::default(),
@@ -1834,7 +1834,7 @@ async fn memory_routes_remember_confirm_export_purge() {
 
     let res = send(Request::get(format!("/api/memory/export?session_id={}", rec.session_id)).body(Body::empty()).unwrap()).await;
     let export: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
-    assert_eq!(export["format"], "zavora-memory-export/v1");
+    assert_eq!(export["format"], "agentrix-memory-export/v1");
     assert_eq!(export["items"].as_array().unwrap().len(), 2);
 
     // The greeting route uses the remembered home location.
@@ -2543,7 +2543,7 @@ async fn work_stub_agents_build_and_label_themselves() {
     assert_eq!(social.name(), "professional_social_agent");
 }
 
-/// Regression: every runner is keyed by its own app name, but only the `zavora-os` session was
+/// Regression: every runner is keyed by its own app name, but only the `agentrix-os` session was
 /// ever created, so the router, Suzy, the Mother's synthesis and the workflow runners failed with
 /// `session.not_found` and silently fell back. `ensure_runner_session` creates the session on
 /// first use and is idempotent.
@@ -2567,7 +2567,7 @@ async fn mother_runner_session_is_created_on_first_use() {
             .expect("stub agent"),
     );
     let sessions: Arc<dyn adk_session::SessionService> = Arc::new(InMemorySessionService::new());
-    let runner = Runner::builder().app_name("zavora-os-test-app").agent(echo).session_service(sessions.clone()).build().expect("runner");
+    let runner = Runner::builder().app_name("agentrix-os-test-app").agent(echo).session_service(sessions.clone()).build().expect("runner");
 
     // Without the helper the run fails exactly the way the live server did: `Runner::run`
     // returns a stream whose first item is the `session.not_found` error.
@@ -2583,7 +2583,7 @@ async fn mother_runner_session_is_created_on_first_use() {
     spatial_os::agents::ensure_runner_session(&runner, "u-runner", "s-runner").await;
     spatial_os::agents::ensure_runner_session(&runner, "u-runner", "s-runner").await; // idempotent
     assert!(sessions
-        .get(GetRequest { app_name: "zavora-os-test-app".into(), user_id: "u-runner".into(), session_id: "s-runner".into(), num_recent_events: None, after: None })
+        .get(GetRequest { app_name: "agentrix-os-test-app".into(), user_id: "u-runner".into(), session_id: "s-runner".into(), num_recent_events: None, after: None })
         .await
         .is_ok());
 

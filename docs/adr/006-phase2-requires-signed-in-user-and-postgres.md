@@ -24,7 +24,7 @@ anonymous ones). The R1 review flagged this as needing a decision.
 1. **A Phase 2 deployment requires `DATABASE_URL` and `JWT_SECRET`.** The `deploy/` compose stack
    sets both. When either is missing the server still boots (rule 6) but logs one warning at startup,
    `Phase 2 persistence disabled — demo/dev mode`, and `/health` already exposes `postgres_enabled`
-   and `auth_enabled` for the UI to label the state. A `ZAVORA_REQUIRE_PERSISTENCE=1` flag makes the
+   and `auth_enabled` for the UI to label the state. A `AGENTRIX_REQUIRE_PERSISTENCE=1` flag makes the
    missing configuration a boot failure; the production compose file sets it. Follow-up ticket for
    team sprint B (Platform).
 2. **The anonymous path is the Phase 1 tour.** `create_session`, `submit_intent`, the scenario

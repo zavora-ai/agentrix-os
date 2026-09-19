@@ -4,7 +4,7 @@
  * edit and batch approve, plus a "while you were away" feed from GET /api/audit
  * (full viewer lands in S11-T3). Reacts live to permission_request / action_result SSE
  * events. Known-level routes: signed-out sessions see a sign-in hint, never fabricated
- * data. Live mode only; disable with localStorage zavora_p2=0.
+ * data. Live mode only; disable with localStorage agentrix_p2=0.
  */
 (function () {
   'use strict';
@@ -37,7 +37,7 @@
     host.appendChild(t);
     setTimeout(() => t.remove(), 6000);
   }
-  window.__ZAVORA_P2_TOAST__ = toast;
+  window.__AGENTRIX_P2_TOAST__ = toast;
 
   function expiresIn(iso) {
     const ms = new Date(iso).getTime() - Date.now();
@@ -60,9 +60,9 @@
   }
 
   async function boot() {
-    if (window.__ZAVORA_BOOT__) await window.__ZAVORA_BOOT__;
-    if (window.__ZAVORA_DEMO__) return;
-    if (localStorage.getItem('zavora_p2') === '0') return;
+    if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
+    if (window.__AGENTRIX_DEMO__) return;
+    if (localStorage.getItem('agentrix_p2') === '0') return;
 
     const openBtn = document.getElementById('apprOpen');
     const panel = document.getElementById('apprPanel');
@@ -77,7 +77,7 @@
     let signedOut = false;
     let lastCount = 0;
 
-    const sid = () => window.__ZAVORA_LIVE__?.getSessionId?.() || null;
+    const sid = () => window.__AGENTRIX_LIVE__?.getSessionId?.() || null;
     const qs = () => {
       const s = sid();
       return s ? `&session_id=${encodeURIComponent(s)}` : '';
@@ -194,7 +194,7 @@
 
     async function load() {
       try {
-        await window.__ZAVORA_LIVE__?.ensureSession?.();
+        await window.__AGENTRIX_LIVE__?.ensureSession?.();
         const res = await fetch(`/api/actions?status=pending${qs()}`, { credentials: 'include' });
         if (res.status === 401 || res.status === 403) {
           signedOut = true;
@@ -305,7 +305,7 @@
     if (refreshBtn) refreshBtn.addEventListener('click', load);
     allBtn.addEventListener('click', approveAll);
 
-    window.addEventListener('zavora:field-event', (e) => {
+    window.addEventListener('agentrix:field-event', (e) => {
       const ev = e.detail || {};
       if (ev.type === 'permission_request') {
         toast(`Needs your approval: ${ev.summary}`);
@@ -320,5 +320,5 @@
     setTimeout(load, 1500);
   }
 
-  boot().catch((err) => console.warn('[zavora] approvals boot failed', err));
+  boot().catch((err) => console.warn('[agentrix] approvals boot failed', err));
 })();

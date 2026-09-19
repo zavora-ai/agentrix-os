@@ -1,4 +1,4 @@
-# Production stack: Postgres + Zavora OS + Caddy (HTTPS).
+# Production stack: Postgres + Agentrix OS + Caddy (HTTPS).
 #
 # From repo parent (../ relative to spatial-os):
 #   docker compose -f spatial-os/deploy/docker-compose.yml up -d --build
@@ -13,7 +13,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spatial_os}
       POSTGRES_DB: spatial_os
     volumes:
-      - zavora_pgdata:/var/lib/postgresql/data
+      - agentrix_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U spatial_os -d spatial_os"]
       interval: 5s
@@ -33,7 +33,7 @@ services:
       DATABASE_URL: postgres://spatial_os:${POSTGRES_PASSWORD:-spatial_os}@postgres:5432/spatial_os
       BASE_URL: https://${DOMAIN}
     volumes:
-      - zavora_artifacts:/app/artifacts
+      - agentrix_artifacts:/app/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,7 +55,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  zavora_pgdata:
-  zavora_artifacts:
+  agentrix_pgdata:
+  agentrix_artifacts:
   caddy_data:
   caddy_config:

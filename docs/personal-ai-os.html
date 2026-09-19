@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Zavora Personal AI OS — Concept & Sprint Plan</title>
+<title>Agentrix Personal AI OS — Concept & Sprint Plan</title>
 <style>
   :root {
     color-scheme: dark;
@@ -268,7 +268,7 @@
 <div class="tip" id="tip" role="status" aria-live="polite"></div>
 <div class="app">
 <nav class="side" aria-label="Sections">
-  <div class="brand"><span class="dot"></span><div><b>Zavora Personal AI OS</b><small>Concept &amp; sprint plan · v1.0</small></div></div>
+  <div class="brand"><span class="dot"></span><div><b>Agentrix Personal AI OS</b><small>Concept &amp; sprint plan · v1.0</small></div></div>
   <div class="links">
     <h4>Concept</h4>
     <a href="#vision"><span class="n">01</span>Vision</a>
@@ -296,7 +296,7 @@
 
 <!-- ============================ HERO ============================ -->
 <section id="top">
-  <div class="eyebrow">Zavora OS · Phase 2 concept</div>
+  <div class="eyebrow">Agentrix OS · Phase 2 concept</div>
   <h1>A Personal AI Operating System for everyday life</h1>
   <p class="lead">One Mother Agent that understands the whole person, coordinating a network of specialized agents across a <b>Work World</b> and a <b>Home World</b>, with an intelligence layer that learns your normal, a three-level automation model that keeps you in control, and memory you own.</p>
   <div class="quote">One person → One AI OS → One Mother Agent → Many specialized agents → One coordinated life.</div>
@@ -318,7 +318,7 @@
       <h3>The problem</h3>
       <p>People run their lives through a dozen disconnected tools: work email, Slack, two calendars, banking, health trackers, family chats, social media, news, music. Each has its own notifications and its own "assistant", and none knows what the others are doing. The person is the only integration layer, and the person is tired.</p>
       <h3>The shift</h3>
-      <p>A chatbot answers questions. An operating system <b>owns the context</b>, <b>schedules work across processes</b>, and <b>enforces permissions</b>. The Personal AI OS applies those three ideas to a person's digital life. Suzy, the existing Zavora coordinator persona, becomes the voice of a real orchestrator.</p>
+      <p>A chatbot answers questions. An operating system <b>owns the context</b>, <b>schedules work across processes</b>, and <b>enforces permissions</b>. The Personal AI OS applies those three ideas to a person's digital life. Suzy, the existing Agentrix coordinator persona, becomes the voice of a real orchestrator.</p>
       <table class="t" style="margin-top:8px">
         <thead><tr><th>OS concept</th><th>Personal AI OS equivalent</th></tr></thead>
         <tbody>
@@ -345,7 +345,7 @@
       <div class="principle"><span class="num">10</span><span><b>Health and money stay conservative.</b> Wellness escalates to professionals; finance never moves money on its own.</span></div>
     </div>
   </div>
-  <h3>What changes from today's Zavora OS</h3>
+  <h3>What changes from today's Agentrix OS</h3>
   <table class="t">
     <thead><tr><th>Today (scenario tour)</th><th>Phase 2 (coordinated life)</th></tr></thead>
     <tbody>
@@ -662,7 +662,7 @@ send_draft      = "send_external"</code></pre>
                ├─ other effects ... automate &amp; recipe → run, audit, undo token
                │                    suggest → enqueue pending_action
                └─ observe &amp; effect ≠ read → "not permitted in observe mode"</code></pre>
-      <p class="muted" style="font-size:12.5px">The agent's prompt is told its mode, so it plans "draft and queue" rather than "send". Zavora OS already wraps toolsets (<code>GeminiSanitizedToolset</code>, <code>FilteredToolset</code>); the gate is one more wrapper.</p>
+      <p class="muted" style="font-size:12.5px">The agent's prompt is told its mode, so it plans "draft and queue" rather than "send". Agentrix OS already wraps toolsets (<code>GeminiSanitizedToolset</code>, <code>FilteredToolset</code>); the gate is one more wrapper.</p>
       <h3>Recipes: automation the user approves once</h3>
 <pre><code>recipe: archive-newsletters
 owner_agent: email
@@ -827,7 +827,7 @@ mode: automate · approved_by_user: 2026-10-14 · undo_window: 7d</code></pre>
   </ol></div>
   <div class="panel" id="j6"><ol class="steps">
     <li>User, in the evening: "What have I been reading lately?"</li>
-    <li><b>Reading &amp; Knowledge</b> answers from the graph: "Mostly Rust async runtimes and two long pieces on distributed consensus — five sessions this week, up from two. This connects to the 'Zavora runtime' project."</li>
+    <li><b>Reading &amp; Knowledge</b> answers from the graph: "Mostly Rust async runtimes and two long pieces on distributed consensus — five sessions this week, up from two. This connects to the 'Agentrix runtime' project."</li>
     <li>"Want a 10-minute summary of the consensus articles read aloud?" → <b>Entertainment</b> plays it (Suggest → approve).</li>
   </ol></div>
   <div class="panel" id="j7"><ol class="steps">
@@ -1013,14 +1013,14 @@ mode: automate · approved_by_user: 2026-10-14 · undo_window: 7d</code></pre>
 <!-- ============================ 18 SOURCES ============================ -->
 <section id="sources">
   <h2><span class="n">18</span>Sources and full documents</h2>
-  <p>This artifact summarizes two longer documents written against the zavora-os codebase at commit <code>228ec78</code> (2026-06-23). The code was read, not built; the crate depends on sibling checkouts that were not available.</p>
+  <p>This artifact summarizes two longer documents written against the agentrix-os codebase at commit <code>228ec78</code> (2026-06-23). The code was read, not built; the crate depends on sibling checkouts that were not available.</p>
   <div class="footer-links">
     <a href="https://github.com/zavora-ai/zavora-os/blob/main/docs/PROGRESS.md" target="_blank" rel="noopener">PROGRESS.md — team plan and status</a>
     <a href="https://github.com/zavora-ai/zavora-os/blob/main/docs/PERSONAL_AI_OS.md" target="_blank" rel="noopener">PERSONAL_AI_OS.md (concept, ~1,300 lines)</a>
     <a href="https://github.com/zavora-ai/zavora-os/blob/main/docs/SPRINT_PLAN.md" target="_blank" rel="noopener">SPRINT_PLAN.md (13 sprints)</a>
     <a href="https://github.com/zavora-ai/zavora-os" target="_blank" rel="noopener">zavora-ai/zavora-os</a>
   </div>
-  <p class="muted" style="font-size:12px;margin-top:16px">Zavora Personal AI OS · Concept v1.0 · 2026-09-19. Chart data in sections 07, 08 and 16 is illustrative.</p>
+  <p class="muted" style="font-size:12px;margin-top:16px">Agentrix Personal AI OS · Concept v1.0 · 2026-09-19. Chart data in sections 07, 08 and 16 is illustrative.</p>
 </section>
 </main>
 </div>

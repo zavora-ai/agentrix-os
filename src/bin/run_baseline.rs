@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let url = std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
     let pool = spatial_os::db::connect(&url).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    let hash_key = std::env::var("LEDGER_HASH_KEY").unwrap_or_else(|_| "zavora-ledger-dev-key".into()).into_bytes();
+    let hash_key = std::env::var("LEDGER_HASH_KEY").unwrap_or_else(|_| "agentrix-ledger-dev-key".into()).into_bytes();
     let ledger = LedgerService::new(Some(pool.clone()), hash_key);
 
     let cfg = baseline::Config::default();

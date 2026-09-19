@@ -24,8 +24,8 @@ pub mod week;
 /// Make sure the adk session `(runner.app_name(), user_id, session_id)` exists before
 /// `runner.run`, creating it on first use.
 ///
-/// Runners are keyed per app (`zavora-os-router`, `zavora-os-suzy`, `zavora-os-morning`, …)
-/// but `POST /api/sessions` only creates the `zavora-os` session. Every other runner used to
+/// Runners are keyed per app (`agentrix-os-router`, `agentrix-os-suzy`, `agentrix-os-morning`, …)
+/// but `POST /api/sessions` only creates the `agentrix-os` session. Every other runner used to
 /// fail with `session.not_found` and fall back — to keywords (router), templates (Mother
 /// synthesis), the static summary (Suzy) or an `error` event (workflows) — while the logs still
 /// said the LLM had answered.

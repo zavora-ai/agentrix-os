@@ -40,7 +40,7 @@ pub struct AppConfig {
     pub linkedin_partner_id: Option<String>,
     pub linkedin_conversion_id: Option<u64>,
     pub allow_demo_mode: bool,
-    /// `ZAVORA_CAMERA` (default on): camera frames over the voice websocket when voice is enabled.
+    /// `AGENTRIX_CAMERA` (default on): camera frames over the voice websocket when voice is enabled.
     pub camera_enabled: bool,
 }
 
@@ -165,20 +165,20 @@ impl AppConfig {
                 let port = std::env::var("PORT").unwrap_or_else(|_| "9847".into());
                 format!("http://{host}:{port}")
             }),
-            signup_endpoint: std::env::var("ZAVORA_SIGNUP_ENDPOINT")
+            signup_endpoint: std::env::var("AGENTRIX_SIGNUP_ENDPOINT")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            linkedin_partner_id: std::env::var("ZAVORA_LINKEDIN_PARTNER_ID")
+            linkedin_partner_id: std::env::var("AGENTRIX_LINKEDIN_PARTNER_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            linkedin_conversion_id: std::env::var("ZAVORA_LINKEDIN_CONVERSION_ID")
+            linkedin_conversion_id: std::env::var("AGENTRIX_LINKEDIN_CONVERSION_ID")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .and_then(|s| s.parse().ok()),
-            allow_demo_mode: std::env::var("ZAVORA_ALLOW_DEMO")
+            allow_demo_mode: std::env::var("AGENTRIX_ALLOW_DEMO")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
-            camera_enabled: std::env::var("ZAVORA_CAMERA")
+            camera_enabled: std::env::var("AGENTRIX_CAMERA")
                 .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
                 .unwrap_or(true),
         })

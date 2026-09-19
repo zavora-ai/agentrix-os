@@ -1,4 +1,4 @@
-# Zavora OS (spatial-os) — Product Specification
+# Agentrix OS (spatial-os) — Product Specification
 
 **Status:** Draft v1.2  
 **Date:** 2026-06-22  
@@ -10,7 +10,7 @@
 
 ## 1. Purpose of this document
 
-This specification defines the **complete target system** for Zavora OS: requirements, design, APIs, agent topology, and a phased delivery plan. It is written **without architectural tradeoffs** — every concept visible in `field.html` must eventually be backed by real agents, tools, and persistence.
+This specification defines the **complete target system** for Agentrix OS: requirements, design, APIs, agent topology, and a phased delivery plan. It is written **without architectural tradeoffs** — every concept visible in `field.html` must eventually be backed by real agents, tools, and persistence.
 
 Work ships in **agile milestones** (vertical slices). Each milestone ends with **git commits**, a **user validation script**, and a decision gate before the next milestone starts. Milestones defer *timing*, not *scope*.
 
@@ -28,7 +28,7 @@ Work ships in **agile milestones** (vertical slices). Each milestone ends with *
 
 ## 2. Product vision
 
-**Zavora OS** is an agentic operating system where the user expresses intent in natural language (text or voice) and the system:
+**Agentrix OS** is an agentic operating system where the user expresses intent in natural language (text or voice) and the system:
 
 1. **Blooms** work into spatial cards — each card is a sub-agent with visible progress.
 2. **Orchestrates** parallel and dependent agent work (e.g. slides wait for numbers + narrative).
@@ -41,7 +41,7 @@ Work ships in **agile milestones** (vertical slices). Each milestone ends with *
 
 ### 2.1 Dual role: product + AWP reference implementation
 
-Zavora OS is intentionally the **canonical demonstration** of the [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com):
+Agentrix OS is intentionally the **canonical demonstration** of the [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com):
 
 | Surface | Consumer | Entry |
 |---------|----------|-------|
@@ -271,7 +271,7 @@ AWP is a **thin protocol layer** on the existing server. Requirements map 1:1 to
 | ID | Requirement | Acceptance |
 |----|-------------|------------|
 | FR-083 | Server exposes all 7 standard AWP endpoints via `awp_routes()`. | Conformance checks in `adk-awp/tests/conformance_tests.rs` pass against deployed URL. |
-| FR-084 | `business.toml` describes Zavora OS: site identity, Suzy `brand_voice`, policies, and `[[capabilities]]` for each public `/api/*` action. | `GET /awp/manifest` lists capabilities that resolve to real routes. |
+| FR-084 | `business.toml` describes Agentrix OS: site identity, Suzy `brand_voice`, policies, and `[[capabilities]]` for each public `/api/*` action. | `GET /awp/manifest` lists capabilities that resolve to real routes. |
 | FR-085 | `POST /awp/a2a` dispatches to the same intent/action pipeline as the human UI (create session → submit intent → SSE or aggregated response). | External agent "Build me a pitch deck" produces same artifacts as browser. |
 | FR-086 | Proactive completions are publishable via `POST /awp/events/subscribe` (HMAC-signed webhooks). | Scout/research completion triggers webhook to subscriber. |
 | FR-087 | Sensitive capabilities (email send, banking, CRM write) declare `access_level` ≥ `known` in `business.toml`; enforced by AWP trust middleware. | Anonymous request to gated capability returns AWP error envelope. |
@@ -413,7 +413,7 @@ let app = Router::new()
 
 **A2A handler:** `POST /awp/a2a` parses `AwpTypedMessage`, maps message type → existing handler (e.g. `IntentSubmit` → `intent.rs`). Suzy `brand_voice` in `business.toml` aligns with prerecorded clip persona.
 
-**Events:** When ambient agents complete (M7), emit AWP event → deliver to webhook subscribers. This is how external agents "watch" Zavora OS work while the user lives.
+**Events:** When ambient agents complete (M7), emit AWP event → deliver to webhook subscribers. This is how external agents "watch" Agentrix OS work while the user lives.
 
 **Dependencies:** `adk-awp`, `awp-types` (path deps in `Cargo.toml`, same as `adk-rust` workspace).
 
@@ -496,7 +496,7 @@ All server → client events on `POST /api/sessions/{sid}/intent` (or GET SSE ch
 **Demo mode preservation (NFR-008):**
 
 ```javascript
-const DEMO = new URLSearchParams(location.search).has('demo') || !window.__ZAVORA_API__;
+const DEMO = new URLSearchParams(location.search).has('demo') || !window.__AGENTRIX_API__;
 // if DEMO: use existing scenarios{} path unchanged
 ```
 
@@ -511,9 +511,9 @@ const DEMO = new URLSearchParams(location.search).has('demo') || !window.__ZAVOR
 | HTTP server | Axum + adk-server `ServerBuilder` | Consistent with sibling apps |
 | Streaming | SSE | docx-agent-app proven pattern |
 | Live voice (final) | adk-realtime + WebSocket | mia proven pattern |
-| Spreadsheets | worksheet-mcp + zavora-xlsx | excel-agent-app |
+| Spreadsheets | worksheet-mcp + agentrix-xlsx | excel-agent-app |
 | Documents | docx-mcp | docx-agent-app |
-| Presentations | slides-mcp-server + zavora-slide | `mcp-servers/mcp_slides` (~72 tools, .pptx/.pdf) |
+| Presentations | slides-mcp-server + agentrix-slide | `mcp-servers/mcp_slides` (~72 tools, .pptx/.pdf) |
 | Calendar | mcp-calendar | Google Calendar + Microsoft Graph |
 | Email | mcp-email | Gmail, Graph, IMAP, SMTP (~24 tools) |
 | News & briefs | mcp-news | GDELT (free), GNews, HN, sports, partial markets |
@@ -797,7 +797,7 @@ Each milestone:
 | M10-T2 | Mic stream → adk-realtime |
 | M10-T3 | Tool calls during voice |
 | M10-T4 | Fallback to wav clips on WS failure |
-| M10-T5 | Camera channel: client sends `{type:"frame", mime, data}` (JPEG, ≈1 fps, gated at 2.5 fps / 256 KB) up `/ws/voice`; Suzy reports deliberate gestures with the `ui_gesture` tool, relayed as `tool_call`; `gestures.js` maps swipe → world pager, open palm → `POST /api/pause`, wave → briefing intent. Frames are never stored or logged; flag `ZAVORA_CAMERA`; `/api/voice/status` exposes `camera` |
+| M10-T5 | Camera channel: client sends `{type:"frame", mime, data}` (JPEG, ≈1 fps, gated at 2.5 fps / 256 KB) up `/ws/voice`; Suzy reports deliberate gestures with the `ui_gesture` tool, relayed as `tool_call`; `gestures.js` maps swipe → world pager, open palm → `POST /api/pause`, wave → briefing intent. Frames are never stored or logged; flag `AGENTRIX_CAMERA`; `/api/voice/status` exposes `camera` |
 
 **Validation:** Voice conversation with Suzy updates calendar card in real time.
 
@@ -843,7 +843,7 @@ Tasks not tied to a single milestone (ongoing):
 
 ## 11. MCP integration plan
 
-Zavora OS v1.0 wires **~12 MCP servers** (not the full `mcp-servers` monorepo). Enterprise verticals (ERP, SCADA, EHR, fraud, LIMS, etc.) are out of scope — see Appendix C §C.3.
+Agentrix OS v1.0 wires **~12 MCP servers** (not the full `mcp-servers` monorepo). Enterprise verticals (ERP, SCADA, EHR, fraud, LIMS, etc.) are out of scope — see Appendix C §C.3.
 
 ### 11.1 Phased boot order
 
@@ -936,7 +936,7 @@ After M2, every release re-runs:
 
 ## 14. Definition of done (v1.0 GA)
 
-Zavora OS v1.0 is complete when:
+Agentrix OS v1.0 is complete when:
 
 - [ ] All FR-001–FR-087 satisfied
 - [ ] All NFR-001–NFR-011 satisfied
@@ -966,7 +966,7 @@ Zavora OS v1.0 is complete when:
 
 ## Appendix C — MCP integration assessment
 
-Survey of `mcp-servers/` against Zavora OS scenarios. Full analysis used to derive §11.
+Survey of `mcp-servers/` against Agentrix OS scenarios. Full analysis used to derive §11.
 
 ### C.1 Priority tiers
 
@@ -1032,7 +1032,7 @@ Survey of `mcp-servers/` against Zavora OS scenarios. Full analysis used to deri
 
 ### C.3 Servers that do not add consumer OS value
 
-The monorepo contains 100+ MCP servers for regulated industries and enterprise workflows. None map to Zavora OS v1 scenarios unless the product pivots: mcp-erp, mcp-scada, mcp-ehr, mcp-fraud, mcp-warranty, mcp-lims, mcp-student-records, mcp-pharmacy, mcp-credit-bureau, etc.
+The monorepo contains 100+ MCP servers for regulated industries and enterprise workflows. None map to Agentrix OS v1 scenarios unless the product pivots: mcp-erp, mcp-scada, mcp-ehr, mcp-fraud, mcp-warranty, mcp-lims, mcp-student-records, mcp-pharmacy, mcp-credit-bureau, etc.
 
 ### C.4 Catalog gaps and mitigations
 
@@ -1052,7 +1052,7 @@ The monorepo contains 100+ MCP servers for regulated industries and enterprise w
 
 ## Appendix D — AWP demonstration narrative
 
-Use this story when presenting Zavora OS as an AWP reference implementation.
+Use this story when presenting Agentrix OS as an AWP reference implementation.
 
 ### D.1 The problem AWP solves here
 
@@ -1082,7 +1082,7 @@ Both paths should produce artifacts in `artifacts/{session}/` and update session
 ### D.4 Suggested `business.toml` header
 
 ```toml
-site_name = "Zavora OS"
+site_name = "Agentrix OS"
 site_description = "The agentic OS that works while you live — spatial agent orchestration for humans and AI agents."
 domain = "zavora.ai"
 contact = "hello@zavora.ai"

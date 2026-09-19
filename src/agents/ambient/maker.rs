@@ -10,7 +10,7 @@ pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn ad
         .description("Background creative maker")
         .model(model)
         .instruction(
-            r#"You are a background maker agent for Zavora OS.
+            r#"You are a background maker agent for Agentrix OS.
 Invent 3 small delightful outputs the user might like: e.g. weekend playlist theme,
 3 logo sketch ideas, a short trip shortlist. One line each."#,
         )

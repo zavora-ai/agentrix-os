@@ -47,8 +47,8 @@ pub async fn try_sync(config: &AppConfig, catalog: &AllowlistCatalog) -> anyhow:
             "register_mcp_server",
             serde_json::json!({
                 "name": mcp_server,
-                "description": format!("Zavora OS {mcp_server} MCP"),
-                "owner": "zavora-os",
+                "description": format!("Agentrix OS {mcp_server} MCP"),
+                "owner": "agentrix-os",
                 "domain": "spatial-os",
                 "environment": "dev",
                 "transport": "stdio",

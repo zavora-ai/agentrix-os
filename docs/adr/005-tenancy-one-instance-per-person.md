@@ -1,4 +1,4 @@
-# ADR-005 — Tenancy: one Zavora OS instance per person through the beta
+# ADR-005 — Tenancy: one Agentrix OS instance per person through the beta
 
 **Status:** Proposed (awaiting product-owner acceptance) · **Date:** 2026-09-20 · **Sprint:** team sprint A (`docs/PROGRESS.md`) · **Concept:** `docs/PERSONAL_AI_OS.md` §1.2, §12.1, §12.2; `docs/SPRINT_PLAN.md` §9
 
@@ -35,7 +35,7 @@ before S4/S5 because the Work and Home worlds spawn identity-specific MCP childr
 
 ## Decision
 
-**Option A through the beta gate (end of team sprint F).** Zavora OS is deployed as one instance per
+**Option A through the beta gate (end of team sprint F).** Agentrix OS is deployed as one instance per
 person. Everything that is naturally per-process (MCP credentials, cron, DND, pause) may assume a
 single owner.
 
@@ -44,7 +44,7 @@ Rules that keep option B open:
 1. Persistent rows keep their `user_id` column and every query filters by it (already the R1 rule).
 2. New process-wide handles (`OnceLock` services) are acceptable, but any state they hold that would
    differ between people must be keyed by `user_id`.
-3. An instance has an **owner allowlist** (`ZAVORA_OWNER_EMAILS`, comma-separated). Sign-in for any
+3. An instance has an **owner allowlist** (`AGENTRIX_OWNER_EMAILS`, comma-separated). Sign-in for any
    other account is refused, so a shared Google OAuth client cannot create a second user on someone
    else's instance. Follow-up ticket for team sprint B (Platform).
 4. Onboarding (§13.8) is "provision an instance, then connect accounts" — the MCP auth commands are

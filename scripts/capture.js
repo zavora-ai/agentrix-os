@@ -1,6 +1,6 @@
 // Captures the greeting → scenario bloom beat as PNG frames.
 // Local demo:  node capture.js
-// Production:  ZAVORA_URL=https://os.zavora.example node capture.js
+// Production:  AGENTRIX_URL=https://os.zavora.example node capture.js
 const puppeteer = require('puppeteer-core');
 const path = require('path');
 const fs = require('fs');
@@ -8,7 +8,7 @@ const fs = require('fs');
 const CHROME =
   process.env.CHROME_PATH ||
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const BASE_URL = process.env.ZAVORA_URL;
+const BASE_URL = process.env.AGENTRIX_URL;
 const URL = BASE_URL
   ? `${BASE_URL.replace(/\/$/, '')}/?demo=1`
   : 'file://' + path.resolve(__dirname, '../web/index.html') + '?demo=1';

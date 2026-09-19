@@ -30,7 +30,7 @@ pub async fn create_session(
     let _ = state
         .session_service
         .create(CreateRequest {
-            app_name: "zavora-os".into(),
+            app_name: "agentrix-os".into(),
             user_id: record.user_id.clone(),
             session_id: Some(record.session_id.clone()),
             state: Default::default(),

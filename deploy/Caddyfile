@@ -1,4 +1,4 @@
-# TLS reverse proxy for Zavora OS.
+# TLS reverse proxy for Agentrix OS.
 # Set DOMAIN in deploy/.env (e.g. os.zavora.example).
 
 {$DOMAIN} {

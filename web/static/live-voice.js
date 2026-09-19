@@ -2,7 +2,7 @@
  * Gemini Live voice bridge — WS /ws/voice (mia pattern).
  * Falls back to prerecorded clips + SpeechRecognition when unavailable.
  * Camera channel (M10-T5): with voice active, still frames go up the same socket about once a
- * second and Suzy's `ui_gesture` tool call comes back as a `zavora:gesture` event (gestures.js).
+ * second and Suzy's `ui_gesture` tool call comes back as a `agentrix:gesture` event (gestures.js).
  */
 (function () {
   'use strict';
@@ -108,14 +108,14 @@
       if (msg.type === 'connected' && msg.session_id) {
         sessionId = msg.session_id;
         try {
-          sessionStorage.setItem('zavora_session_id', sessionId);
+          sessionStorage.setItem('agentrix_session_id', sessionId);
         } catch (_) {}
       }
       if (msg.type === 'connected' && typeof msg.camera === 'boolean') {
         cameraEnabled = enabled && msg.camera;
       }
       if (msg.type === 'tool_call' && msg.name === 'ui_gesture' && msg.arguments?.gesture) {
-        window.dispatchEvent(new CustomEvent('zavora:gesture', { detail: { gesture: msg.arguments.gesture } }));
+        window.dispatchEvent(new CustomEvent('agentrix:gesture', { detail: { gesture: msg.arguments.gesture } }));
       }
       if (msg.type === 'frame_rejected') {
         console.warn('live camera: frame rejected —', msg.reason);
@@ -137,11 +137,11 @@
       if (msg.type === 'tool_call' && msg.name === 'submit_intent') {
         const sid = msg.arguments?.session_id || sessionId;
         if (sid) {
-          sessionStorage.setItem('zavora_session_id', sid);
+          sessionStorage.setItem('agentrix_session_id', sid);
           sessionId = sid;
         }
         window.dispatchEvent(
-          new CustomEvent('zavora:voice-intent', { detail: { sessionId: sid, args: msg.arguments } })
+          new CustomEvent('agentrix:voice-intent', { detail: { sessionId: sid, args: msg.arguments } })
         );
       }
       if (msg.type === 'error') {
@@ -277,7 +277,7 @@
     }
   }
 
-  window.ZavoraLiveVoice = {
+  window.AgentrixLiveVoice = {
     probe,
     start,
     stop,

@@ -13,7 +13,7 @@ pub struct HealthResponse {
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        service: "zavora-os",
+        service: "agentrix-os",
         runtime: state.runtime.clone(),
     })
 }
