@@ -83,7 +83,6 @@ pub fn stream_proactive(
                 .send(Ok(to_event(&FieldEvent::SuzySummary {
                     key: "proactive".into(),
                     html: "Do not disturb is on — background agents are paused. Turn off DND to see what they found.".into(),
-                    audio_clip: None,
                 })))
                 .await;
             let _ = tx.send(Ok(to_event(&FieldEvent::Done))).await;

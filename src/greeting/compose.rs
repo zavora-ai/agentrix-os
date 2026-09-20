@@ -14,10 +14,7 @@ pub struct GreetingPayload {
     pub full_text: String,
     pub source: &'static str,
     pub integrations: Vec<String>,
-    pub audio_clip: String,
 }
-
-const DEFAULT_AUDIO: &str = "/audio/greeting.wav";
 
 pub async fn compose(
     runner: Option<&Arc<Runner>>,
@@ -72,7 +69,6 @@ fn build_payload(
         full_text,
         source,
         integrations,
-        audio_clip: DEFAULT_AUDIO.into(),
     }
 }
 

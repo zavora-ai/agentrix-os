@@ -136,7 +136,7 @@ pub fn stream_message(html: String) -> Response {
     let (tx, rx) = mpsc::channel::<Result<axum::response::sse::Event, Infallible>>(4);
     tokio::spawn(async move {
         let _ = tx
-            .send(Ok(to_event(&FieldEvent::SuzySummary { key: "mother".into(), html, audio_clip: None })))
+            .send(Ok(to_event(&FieldEvent::SuzySummary { key: "mother".into(), html })))
             .await;
         let _ = tx.send(Ok(to_event(&FieldEvent::Done))).await;
     });
@@ -239,7 +239,6 @@ fn stream_multi_target(
             .send(Ok(to_event(&FieldEvent::SuzySummary {
                 key: "mother".into(),
                 html: synthesis.html.clone(),
-                audio_clip: None,
             })))
             .await;
         for a in state

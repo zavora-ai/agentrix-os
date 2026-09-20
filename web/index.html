@@ -1368,7 +1368,6 @@ function fuse(target, source){
   target.querySelector('.status').className = 'status working';
   target.classList.add('child');
   sfx('fuse');
-  speak('fuse');
   setTimeout(() => {
     body.innerHTML = '';
     addLine(body, `<div class="big">Updated</div>`, 0);
@@ -1548,7 +1547,6 @@ function showSuzy(){
   if (!html) return;   // live scenarios outside the demo tour stream their own suzy_summary
   suzyText.innerHTML = html;
   suzy.classList.add('show');
-  speak(suzyText.textContent);
   // after the summary, suggest the matching ACTION prompt (triggers Conducting)
   setTimeout(() => armSuggestion(actionPrompt[currentKey]), 1600);
 }
@@ -1584,11 +1582,6 @@ const actionHints = {};   // (replaced by the tour above)
 
 // ---- Voice: prerecorded clips (generated once via gen_audio.py) — no live TTS, no cost ----
 // Map a clip id (or summary text) → audio file in audio/.
-function clipFor(arg){
-  if (suzySummaries[arg]) return arg;                 // 'morning' | 'lisbon' | 'week' | 'deck'
-  for (const k in suzySummaries) if (suzySummaries[k].replace(/<[^>]+>/g,'') === arg) return k;
-  return arg;                                          // already an id: 'greeting','deck_done','fuse'
-}
 
 let audioCtx;
 // ---- SFX: synthesized cues (no asset files) ----
@@ -1618,67 +1611,6 @@ function sfx(type){
 document.addEventListener('pointerdown', e => {
   if (e.target.closest('.btn, .chip, .card, .bgcard, .tile, .mic, .go, .mute, .flow-nav, .lf-dots i')) sfx('click');
 }, true);
-let currentVoice = null;   // only one voice clip plays at a time
-function stopVoice(){
-  if (currentVoice) { try { currentVoice.pause(); currentVoice.currentTime = 0; } catch(_){} currentVoice = null; }
-}
-async function speak(arg, onAudio){
-  const id = clipFor(arg);
-  try {
-    stopVoice();   // cut off any in-progress clip
-    const audio = new Audio(`audio/${id}.wav`);
-    currentVoice = audio;
-    audio.addEventListener('ended', () => { if (currentVoice === audio) currentVoice = null; });
-    drive(audio);                       // bubble follows the voice
-    if (onAudio) onAudio(audio);
-    await audio.play();
-    return true;
-  } catch (e){
-    // NotAllowedError = browser autoplay block before any user gesture — expected, will play on first tap
-    if (e.name !== 'NotAllowedError') console.warn('clip play failed:', id, e.message);
-    return false;
-  }
-}
-
-// Make the bubble pulse to the live audio amplitude
-function drive(audio){
-  // On file://, routing through an analyser silences the clip (CORS taint) — just pulse.
-  if (location.protocol === 'file:') {
-    voiceTarget().classList.add('speaking');
-    const off = () => voiceTarget().classList.remove('speaking');
-    audio.addEventListener('ended', off); audio.addEventListener('pause', off);
-    return;
-  }
-  try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const src = audioCtx.createMediaElementSource(audio);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.75;
-    src.connect(analyser); analyser.connect(audioCtx.destination);
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    let smooth = 0, raf;
-    const loop = () => {
-      analyser.getByteFrequencyData(data);
-      let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i];
-      const amp = Math.min(1, (sum / data.length) / 90);   // 0..1
-      smooth += (amp - smooth) * 0.4;                       // ease
-      voiceTarget().style.setProperty('--amp', smooth.toFixed(3));
-      raf = requestAnimationFrame(loop);
-    };
-    loop();
-    const stop = () => { cancelAnimationFrame(raf); voiceTarget().style.setProperty('--amp', 0); };
-    audio.addEventListener('ended', stop);
-    audio.addEventListener('pause', stop);
-  } catch (e){
-    // analyser unavailable (e.g. file://) — still animate with a simple pulse while playing
-    voiceTarget().classList.add('speaking');
-    const off = () => voiceTarget().classList.remove('speaking');
-    audio.addEventListener('ended', off); audio.addEventListener('pause', off);
-  }
-}
-// which element reacts to the voice — greeting orb while greeting, else the bubble
-function voiceTarget(){ return greet.classList.contains('show') ? greetOrb : suzyFace; }
 
 function b64ToBytes(b64){
   const bin = atob(b64); const out = new Uint8Array(bin.length);
@@ -2281,7 +2213,6 @@ let greetingPayload = null;
 const GREETING_FALLBACK = {
   salutation: 'Hello',
   full_text: "I'm ready when you are — tell me what you'd like to do.",
-  audio_clip: '/audio/greeting.wav',
 };
 
 function salutationForHour(h = new Date().getHours()) {
@@ -2296,17 +2227,12 @@ function applySalutation(text) {
 function greetingCaption() {
   return greetingPayload?.full_text || GREETING_FALLBACK.full_text;
 }
-function greetingAudioUrl() {
-  const clip = greetingPayload?.audio_clip || GREETING_FALLBACK.audio_clip;
-  return clip.startsWith('/') ? clip : `/audio/${clip}`;
-}
 async function fetchGreetingPayload() {
   if (window.__AGENTRIX_DEMO__) {
     greetingPayload = {
       salutation: salutationForHour(),
       full_text: `${salutationForHour()}. ${GREETING_FALLBACK.full_text}`,
       source: 'demo',
-      audio_clip: GREETING_FALLBACK.audio_clip,
     };
     return;
   }
@@ -2319,7 +2245,6 @@ async function fetchGreetingPayload() {
       salutation: salutationForHour(),
       full_text: `${salutationForHour()}. ${GREETING_FALLBACK.full_text}`,
       source: 'fallback',
-      audio_clip: GREETING_FALLBACK.audio_clip,
     };
   }
 }
@@ -2331,45 +2256,37 @@ async function playGreeting(){
   greetCC.classList.add('show');
   const spans = [...greetCC.querySelectorAll('.w')];
   const live = window.AgentrixLiveVoice;
-  if (live?.isEnabled?.()) {
-    const liveOk = await live.speakText(caption);
-    if (liveOk) {
-      spans.forEach(s => s.classList.add('lit'));
-      greetingPlayed = true;
-      document.getElementById('tapHint')?.classList.add('gone');
-      greetingBusy = false;
-      return;
-    }
+  // Suzy speaks only through Gemini Live — there are no prerecorded clips. Without Live the
+  // greeting is captions only.
+  const spoken = live?.isEnabled?.() ? await live.speakText(caption) : false;
+  if (spoken) {
+    lightCaption(spans, live);
+    greetingPlayed = true;
+    document.getElementById('tapHint')?.classList.add('gone');
+  } else {
+    spans.forEach(s => s.classList.add('lit'));
   }
-  const ok = await speakUrl(greetingAudioUrl(), audio => {
-    const lit = () => {
-      const p = audio.duration ? audio.currentTime / audio.duration : 0;
-      const n = Math.round(p * spans.length);
-      spans.forEach((s, i) => s.classList.toggle('lit', i < n));
-    };
-    audio.addEventListener('timeupdate', lit);
-    audio.addEventListener('ended', () => spans.forEach(s => s.classList.add('lit')));
-  });
-  if (ok) { greetingPlayed = true; document.getElementById('tapHint')?.classList.add('gone'); }
-  else spans.forEach(s => s.classList.add('lit'));   // no audio → just show full text
   greetingBusy = false;
 }
-let wallTimer, clockTimer, idleTimer;
-async function speakUrl(url, onAudio){
-  try {
-    stopVoice();
-    const audio = new Audio(url);
-    currentVoice = audio;
-    audio.addEventListener('ended', () => { if (currentVoice === audio) currentVoice = null; });
-    drive(audio);
-    if (onAudio) onAudio(audio);
-    await audio.play();
-    return true;
-  } catch (e){
-    if (e.name !== 'NotAllowedError') console.warn('greeting audio failed:', url, e.message);
-    return false;
-  }
+// Light the caption in step with playback. The reply streams in ahead of real time, so the
+// words are spread over the audio still queued; when the queue drains the line is lit.
+function lightCaption(spans, live){
+  const t0 = performance.now();
+  let total = 0, heard = false;
+  const tick = () => {
+    const elapsed = (performance.now() - t0) / 1000;
+    const queued = live.queuedSeconds?.() || 0;
+    if (queued > 0) { heard = true; total = Math.max(total, elapsed + queued); }
+    if ((heard && queued <= 0) || elapsed > 20) { spans.forEach(s => s.classList.add('lit')); return; }
+    if (total > 0) {
+      const n = Math.round(Math.min(1, elapsed / total) * spans.length);
+      spans.forEach((s, i) => s.classList.toggle('lit', i < n));
+    }
+    requestAnimationFrame(tick);
+  };
+  tick();
 }
+let wallTimer, clockTimer, idleTimer;
 async function openGreeting(){          // stage 1: minimal (pre-login)
   greet.classList.add('show');
   tickClock(); clockTimer = setInterval(tickClock, 10000);
@@ -2391,7 +2308,7 @@ function enterAmbient(){          // stage 2: wallpaper + quote + jazz
 function startDay(){
   clearTimeout(idleTimer);
   clearInterval(wallTimer); clearInterval(clockTimer);
-  stopVoice();                 // greeting clip stays in the greeting stage only
+  window.AgentrixLiveVoice?.stopSpeaking?.();   // the greeting stays in the greeting stage
   fadeJazz();
   greet.classList.remove('show');
   // pick a random use case each start so it never feels like a static page
@@ -2504,7 +2421,6 @@ function finishDeck(opts){
   }
   deck.querySelector('.st').textContent = 'pinned';
   sfx('ding');
-  speak('deck_done');
 }
 window.conductAction = conductAction;
 
@@ -2603,10 +2519,11 @@ window.__AGENTRIX_UI__ = {
   setTotalCards(v) { totalCards = v; },
   applyModeBadges,
   armSuggestion,
-  showSuzyCustom(html, audioClip) {
+  showSuzyCustom(html, opts) {
     suzyText.innerHTML = html;
     suzy.classList.add('show');
-    speak(audioClip || suzyText.textContent);
+    // Summaries are read aloud through Gemini Live (opts.speak); toasts and hints stay silent.
+    if (opts?.speak && !window.__AGENTRIX_DEMO__) window.AgentrixLiveVoice?.speakText?.(suzyText.textContent);
     if (window.__AGENTRIX_DEMO__) {
       setTimeout(() => armSuggestion(actionPrompt[currentKey]), 1600);
     }

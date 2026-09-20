@@ -1,4 +1,4 @@
-//! Suzy summaries, audio clip matching, and tour suggestions.
+//! Suzy summaries and tour suggestions.
 
 use std::sync::Arc;
 
@@ -10,38 +10,6 @@ use crate::events::sse::{to_event, FieldEvent};
 use crate::scenarios::tour;
 use crate::state::SessionStore;
 
-fn strip_html(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    for ch in html.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Match dynamic summary text to a prerecorded audio clip id, if any.
-pub fn audio_clip_for(html: &str, scenario: &str) -> Option<String> {
-    let plain = strip_html(html);
-    for key in crate::agents::router::SCENARIOS {
-        let static_plain = strip_html(mock::suzy_summary(key));
-        if plain == static_plain {
-            return Some((*key).to_string());
-        }
-    }
-    if plain.len() < 12 {
-        return Some(scenario.to_string());
-    }
-    tracing::debug!(
-        scenario,
-        "no prerecorded audio clip for dynamic summary — queue gen_audio.py if needed"
-    );
-    None
-}
 
 pub async fn suzy_html(
     suzy_runner: Option<&Arc<Runner>>,
@@ -49,7 +17,7 @@ pub async fn suzy_html(
     session_id: &str,
     user_id: &str,
     scenario: &str,
-) -> (String, Option<String>) {
+) -> String {
     let fallback = mock::suzy_summary(scenario).to_string();
 
     let html = if let Some(runner) = suzy_runner {
@@ -68,8 +36,7 @@ pub async fn suzy_html(
         fallback
     };
 
-    let audio_clip = audio_clip_for(&html, scenario);
-    (html, audio_clip)
+    html
 }
 
 pub async fn emit_suzy_and_suggest(
@@ -80,14 +47,12 @@ pub async fn emit_suzy_and_suggest(
     user_id: &str,
     scenario: &str,
 ) {
-    let (html, audio_clip) =
-        suzy_html(suzy_runner, store, session_id, user_id, scenario).await;
+    let html = suzy_html(suzy_runner, store, session_id, user_id, scenario).await;
 
     let _ = tx
         .send(Ok(to_event(&FieldEvent::SuzySummary {
             key: scenario.into(),
             html,
-            audio_clip,
         })))
         .await;
 

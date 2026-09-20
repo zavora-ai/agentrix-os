@@ -44,7 +44,7 @@ export type FieldEvent =
   | { type: 'card_resolve'; index: number; resolve: CardResolve }
   | { type: 'card_surface'; index: number; surface: string; slide: number; total: number }
   | { type: 'error'; message: string }
-  | { type: 'suzy_summary'; key: string; html: string; audio_clip?: string }
+  | { type: 'suzy_summary'; key: string; html: string }
   | { type: 'suggest'; text: string; kind: string }
   | { type: 'conduct'; steps: ConductStep[] }
   | {

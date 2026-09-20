@@ -88,7 +88,7 @@ node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/st
 | `migrations/` | sqlx migrations, applied at boot. Numbered; never edit an applied one. |
 | `docs/` | `SPECIFICATION.md` (Phase 1 spec, FR/NFR ids), `IMPLEMENTATION_PLAN.md` (tickable milestones and sprints), `PERSONAL_AI_OS.md` + `SPRINT_PLAN.md` (Phase 2), `PROGRESS.md` (per-person team sprints A–F for S4–S12), `adr/` (decisions), `personal-ai-os.html` (one-page interactive summary). |
 | `tests/validate.rs` | The integration suite; `tests/common/mod.rs` has env and path helpers. |
-| `scripts/` | Demo capture, TTS clip generation, synthetic ledger generator. |
+| `scripts/` | Demo capture, mobile smoke, gesture-classifier test, synthetic ledger generator. |
 
 ## Rules that must survive every change
 

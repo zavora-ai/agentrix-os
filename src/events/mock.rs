@@ -262,12 +262,10 @@ pub fn stream_intent_with_scenario(
             )
             .await;
         } else {
-            let html = suzy_summary(&key).to_string();
             let _ = tx
                 .send(Ok(to_event(&FieldEvent::SuzySummary {
                     key: key.clone(),
-                    html: html.clone(),
-                    audio_clip: coordinator::audio_clip_for(&html, &key),
+                    html: suzy_summary(&key).to_string(),
                 })))
                 .await;
             if let Some(action) = tour::action_prompt(&key) {

@@ -357,7 +357,7 @@
           if (ui.showSuzyCustom) ui.showSuzyCustom(ev.message || 'Something went wrong.');
           break;
         case 'suzy_summary':
-          ui.showSuzyCustom(ev.html, ev.audio_clip);
+          ui.showSuzyCustom(ev.html, { speak: true }); // Suzy reads the summary through Live
           break;
         case 'suggest':
           if (ui.armSuggestion) ui.armSuggestion(ev.text);

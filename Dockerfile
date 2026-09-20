@@ -27,7 +27,6 @@ WORKDIR /app
 
 COPY --from=builder /build/spatial-os/target/release/spatial-os /usr/local/bin/spatial-os
 COPY --from=builder /build/spatial-os/web /app/web
-COPY --from=builder /build/spatial-os/audio /app/audio
 COPY --from=builder /build/spatial-os/migrations /app/migrations
 COPY --from=builder /build/spatial-os/business.toml /app/business.toml
 COPY --from=builder /build/spatial-os/mcp_allowlists.toml /app/mcp_allowlists.toml

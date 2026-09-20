@@ -298,7 +298,6 @@ async fn greeting_brand_fallback_is_honest() {
     assert!(!payload.full_text.to_lowercase().contains("meetings"));
     assert!(!payload.full_text.to_lowercase().contains("emails"));
     assert!(payload.full_text.contains("I'm synced and ready"));
-    assert_eq!(payload.audio_clip, "/audio/greeting.wav");
 }
 
 #[tokio::test]
