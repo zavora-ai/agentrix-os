@@ -3,13 +3,31 @@
 **The agentic operating system that works while you live.** One person, one AI OS, one Mother Agent, many specialised agents, one coordinated life.
 
 [![CI](https://github.com/zavora-ai/agentrix-os/actions/workflows/ci.yml/badge.svg)](https://github.com/zavora-ai/agentrix-os/actions/workflows/ci.yml)
+[![Built with Claude Fable 5.1](https://img.shields.io/badge/built%20with-Claude%20Fable%205.1-7c5cff)](https://www.anthropic.com/claude/fable)
+[![Claude Fable 5.1 Build · Hackerhouse Africa](https://img.shields.io/badge/Claude%20Fable%205.1%20Build-Hackerhouse%20Africa%20%C2%B7%20Nairobi%2C%20Kenya-25d0c0)](#built-with-claude-fable-51)
+
+> ### Built with Claude Fable 5.1
+> Agentrix OS was built at the **Claude Fable 5.1 Build** at **Hackerhouse Africa, Nairobi, Kenya**, with **Claude Fable 5.1** as the engineering partner on every lane — through Claude Code, from the Phase 2 concept and sprint plan to the Rust services, the browser UI, the tests and the verification runs recorded in each pull request. The product's text agents are moving onto Claude Fable 5.1 as well, with Gemini as the fallback ([#19](https://github.com/zavora-ai/agentrix-os/pull/19)).
 
 Agentrix OS is a Rust/Axum server and a spatial browser UI. You state an intent, by text or voice. A **Mother Agent** classifies it, delegates to specialised agents organised into a **Work World** and a **Home World**, runs them against real tools through MCP servers, and streams the results to the field as cards. Suzy, its voice, composes one answer. Every action an agent wants to take passes a **permission gate** you control, and everything the system knows about you lives in a **memory you can read, correct, export and delete**.
 
 ![Agentrix OS — the Work world with eight agents and live cards](docs/screenshots/02-work-world.jpg)
 
+## Contributors
+
+Four people, four lanes, one AI pair. Areas are what each has landed on `main` or has in review; the lane model is in [`docs/PROGRESS.md`](docs/PROGRESS.md).
+
+| Contributor | Lane | What they built |
+|---|---|---|
+| **James Karanja Maina** · [@jkmaina](https://github.com/jkmaina) | Tech lead, product owner · **Platform & data** | Phase 1 end to end (M0–M11): the live SSE shell, the real deck workflow over MCP, the seven scenarios, ambient agents on cron, Postgres sessions and JWT auth, Gemini Live voice, the Docker + Caddy deploy. Phase 2: the team plan and ADRs 005–006, the tasks store and Productivity tools, persisted consents, migrations, a CI that actually runs, the runner-session fix that made the Mother's LLM paths work, the voice fix from the mia pattern, the Agentrix rebrand, the world rosters, local camera gestures, drag and swipe fixes, this README. |
+| **Kim** · [@swiftkimani](https://github.com/swiftkimani) | **Agents & worlds** | The Personal AI OS concept, the sprint plan and the one-page overview; `CLAUDE.md`; Phase 2 Release R1 — Mother Agent intake, delegation and synthesis, the content-free activity ledger, the permission gate with pending actions and audit, personal memory with provenance and encryption; the Work World and Home World mothers and agent registries, follow-up tracker, health guardrail and labeled stubs; the agent bus and arbitration v1; the camera channel that lets Suzy see. |
+| **Robert Kimaiyo** · [@Robertkip](https://github.com/Robertkip) | **Surface** | The two themed worlds with swipe navigation and the domain lens, mode badges on cards and tiles, the Mother chat panel, the approvals inbox with live expiry and the away feed, content-free UI signals for the ledger, TypeScript types for the SSE contract. |
+| **Jotham Siror** · [@Jotham-Siror](https://github.com/Jotham-Siror) | **Intelligence** | Daily pattern aggregation over the ledger and the personal baseline — median and MAD, weekday and weekend classes, 14-day warm-up, drift detection — with the synthetic six-week drift fixture; running the text agents on Claude Fable 5.1 with Gemini fallback (in review). |
+| **Claude Fable 5.1** · [Anthropic](https://www.anthropic.com/claude/fable) | **AI pair on every lane** | Concept and plan review, ADR drafting, Rust and JavaScript implementation, test suites, headless browser verification, live agent and MCP verification, and the pull request write-ups — driven by the team through Claude Code at the Hackerhouse Africa build. |
+
 ## Contents
 
+- [Contributors](#contributors)
 - [Status](#status)
 - [Architecture](#architecture)
 - [Screenshots](#screenshots)
