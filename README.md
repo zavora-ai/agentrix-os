@@ -14,19 +14,6 @@ It is a Rust/Axum server with a spatial browser UI, built on [adk-rust](https://
 
 > Built at the **Claude Fable 5.1 Build**, Hackerhouse Africa, Nairobi, Kenya, by James, Kim, Robert and Jotham with **Claude Fable 5.1** as the engineering partner on every lane. See [Team and credits](#team-and-credits).
 
-## Contents
-
-1. [Why an OS and not a chatbot](#why-an-os-and-not-a-chatbot)
-2. [What it does](#what-it-does)
-3. [How it works](#how-it-works)
-4. [Getting started](#getting-started)
-5. [Configuration](#configuration)
-6. [API](#api)
-7. [Status and roadmap](#status-and-roadmap)
-8. [Developing](#developing)
-9. [Documentation](#documentation)
-10. [Team and credits](#team-and-credits)
-
 ## Why an OS and not a chatbot
 
 People run their lives through a dozen disconnected tools: work email, Slack, two calendars, banking, health trackers, family chats, news, music. Each has its own notifications and its own "assistant", and none knows what the others are doing. The person is the only integration layer.
@@ -182,17 +169,6 @@ Every public route has a `[[capabilities]]` entry in `business.toml` with an acc
 | Operations | `GET /health` — phase, live integrations, persistence · `cargo run --bin migrate` applies migrations without booting |
 
 The SSE event contract is `FieldEvent` in `src/events/sse.rs`, mirrored by TypeScript types in `web/static/types/`.
-
-## Status and roadmap
-
-| Phase | What | State |
-|---|---|---|
-| **Phase 1 · M0–M11** | Live SSE shell, real deck workflow over MCP, seven scenarios, ambient agents on cron, Postgres sessions and JWT auth, Gemini Live voice, Docker and Caddy deploy | on `main` |
-| **Phase 2 · Release 1** | Mother Agent, domain model, content-free ledger, permission gate with pending actions and audit, personal memory with provenance and encryption | on `main` |
-| **Phase 2 · team sprint A** | Work and Home mothers, agent registries and rosters, tasks store, persisted consents, daily patterns and personal baseline, chat panel, approvals inbox, worlds pager, camera channel and local gestures | on `main` or in review |
-| **Next** | Agent bus journeys, daily briefing v2, balance and behaviour observations, TODAY command centre, trust centre, recipes, public beta | [`docs/PROGRESS.md`](docs/PROGRESS.md) |
-
-The plan is thirteen sprints in four releases, run as two parallel tracks by four lanes: Platform, Agents and worlds, Surface, Intelligence. Progress per person and per sprint is tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md).
 
 ## Developing
 
