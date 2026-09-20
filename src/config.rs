@@ -34,6 +34,9 @@ pub struct AppConfig {
     /// Gemini text model, used when `text_model` is Gemini or as the fallback.
     pub gemini_model: String,
     pub gemini_live_model: String,
+    /// BCP-47 tag Gemini Live is pinned to (`VOICE_LANGUAGE`, default `en-US`); empty = let the
+    /// model guess, which mis-transcribes short or accented utterances.
+    pub voice_language: Option<String>,
     pub voice_name: String,
     pub database_url: Option<String>,
     pub jwt_secret: Option<String>,
@@ -158,6 +161,11 @@ impl AppConfig {
                 .unwrap_or_else(|_| "gemini-3.1-flash-lite".into()),
             gemini_live_model: std::env::var("GEMINI_LIVE_MODEL").unwrap_or_else(|_| {
                 "models/gemini-3.8-live".into()
+            voice_language: match std::env::var("VOICE_LANGUAGE") {
+                Ok(v) if v.trim().is_empty() => None,
+                Ok(v) => Some(v.trim().to_string()),
+                Err(_) => Some("en-US".into()),
+            },
             }),
             voice_name: std::env::var("VOICE_NAME").unwrap_or_else(|_| "Aoede".into()),
             database_url: std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty()),

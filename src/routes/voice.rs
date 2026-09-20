@@ -11,7 +11,7 @@ use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use adk_realtime::events::ServerEvent;
 
@@ -145,6 +145,17 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                                     let _ = runner_send.create_response().await;
                                 }
                             }
+                            // Read-aloud (greeting, a summary): framed so the model says the
+                            // words instead of answering them as a user turn.
+                            Some("speak") => {
+                                if let Some(content) = msg.get("content").and_then(|c| c.as_str())
+                                    && !content.trim().is_empty()
+                                {
+                                    let prompt = crate::voice::realtime::read_aloud_prompt(content);
+                                    let _ = runner_send.send_text(&prompt).await;
+                                    let _ = runner_send.create_response().await;
+                                }
+                            }
                             Some("commit_audio") => {
                                 let _ = runner_send.commit_audio().await;
                             }
@@ -187,6 +198,7 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
         if frame_gate.accepted + frame_gate.rejected > 0 {
             tracing::debug!(accepted = frame_gate.accepted, rejected = frame_gate.rejected, "camera frames relayed");
         }
+        debug!("voice: client stopped sending");
     });
 
     let runner_recv = runner.clone();
@@ -194,6 +206,28 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
         loop {
             match runner_recv.next_event().await {
                 Some(Ok(event)) => {
+                    // The pull-style `next_event` relays tool calls but does not run them (only
+                    // `RealtimeRunner::run` and the integrated runner do). Without a function
+                    // response Gemini waits forever and Suzy never speaks again — every turn
+                    // after her first `submit_intent` came back as silence. Run the handler off
+                    // this loop, like the runner's own dispatch, then trigger the follow-up
+                    // response once the result is in.
+                    if let Some((call_id, name, arguments)) = tool_call_to_dispatch(&event) {
+                        let r = runner_recv.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = r.dispatch_tool_call(&call_id, &name, &arguments).await {
+                                warn!(tool = %name, %call_id, "voice tool dispatch failed: {e}");
+                            }
+                            if let Err(e) = r.respond_after_tools().await {
+                                warn!(tool = %name, "post-tool response trigger failed: {e}");
+                            }
+                        });
+                    }
+                    if matches!(event, ServerEvent::ResponseDone { .. })
+                        && let Err(e) = runner_recv.respond_after_tools().await
+                    {
+                        warn!("post-tool response trigger failed: {e}");
+                    }
                     let ws_msg = match &event {
                         ServerEvent::AudioDelta { delta, .. } => {
                             Some(ws::Message::Binary(delta.clone().into()))
@@ -267,7 +301,11 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                     warn!("Gemini voice stream error: {e}");
                     break;
                 }
-                None => break,
+                None => {
+                    let reason = runner_recv.disconnect_reason().await;
+                    debug!(?reason, "voice: Gemini event stream ended");
+                    break;
+                }
             }
         }
     });
@@ -281,11 +319,45 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
     });
 
     tokio::select! {
-        _ = send_handle => {}
-        _ = recv_handle => {}
-        _ = forward_handle => {}
+        _ = send_handle => debug!("voice session ending: client stopped sending"),
+        _ = recv_handle => debug!("voice session ending: Gemini stream ended"),
+        _ = forward_handle => debug!("voice session ending: client sink closed"),
     }
 
     let _ = runner.close().await;
     info!("voice websocket session closed");
+}
+
+/// A tool call the route must answer itself: `(call_id, name, arguments)`.
+fn tool_call_to_dispatch(event: &ServerEvent) -> Option<(String, String, String)> {
+    match event {
+        ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
+            Some((call_id.clone(), name.clone(), arguments.clone()))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_function_calls_are_dispatched() {
+        let call = ServerEvent::FunctionCallDone {
+            event_id: "e".into(),
+            response_id: String::new(),
+            item_id: String::new(),
+            output_index: 0,
+            call_id: "call_1".into(),
+            name: "submit_intent".into(),
+            arguments: r#"{"text":"brief me"}"#.into(),
+        };
+        assert_eq!(
+            tool_call_to_dispatch(&call),
+            Some(("call_1".into(), "submit_intent".into(), r#"{"text":"brief me"}"#.into()))
+        );
+        let done = ServerEvent::ResponseDone { event_id: "e".into(), response: serde_json::json!({}) };
+        assert_eq!(tool_call_to_dispatch(&done), None);
+    }
 }
