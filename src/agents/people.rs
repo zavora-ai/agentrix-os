@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use adk_agent::{LlmAgentBuilder, ParallelAgent, SequentialAgent};
-use adk_model::gemini::GeminiModel;
 
 use super::gemini;
 use super::stub;
@@ -19,7 +18,7 @@ async fn team_agent(
     slack: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = slack {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("team_agent", ts);
         let agent = LlmAgentBuilder::new("team_agent")
             .description("Team card — Slack channels and DMs")
@@ -53,7 +52,7 @@ async fn priya_agent(
     calendar: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = calendar {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("priya_agent", ts);
         let agent = LlmAgentBuilder::new("priya_agent")
             .description("Priya 1:1 prep card")
@@ -87,7 +86,7 @@ async fn connections_agent(
     crm: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = crm {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("connections_agent", ts);
         let agent = LlmAgentBuilder::new("connections_agent")
             .description("Connections card — CRM follow-ups")

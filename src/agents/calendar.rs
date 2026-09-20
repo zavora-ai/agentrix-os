@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
 
 use super::gemini;
 
@@ -10,7 +9,7 @@ pub async fn build(
     model_name: &str,
     toolset: Arc<dyn adk_core::Toolset>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
     let tools = gemini::filtered_for_agent("calendar_agent", toolset);
 
     let agent = LlmAgentBuilder::new("calendar_agent")

@@ -29,6 +29,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-anthropic"
+version = "2.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "hex",
+ "hmac",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "adk-artifact"
 version = "2.2.0"
 dependencies = [
@@ -109,6 +129,7 @@ dependencies = [
 name = "adk-model"
 version = "2.2.0"
 dependencies = [
+ "adk-anthropic",
  "adk-core",
  "adk-gemini",
  "adk-telemetry",

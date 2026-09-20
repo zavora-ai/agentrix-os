@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
 
 use crate::agents::gemini;
 use crate::agents::stub;
@@ -12,7 +11,7 @@ pub async fn build(
     real_estate: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = real_estate {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("scout_agent", ts);
         let agent = LlmAgentBuilder::new("scout_agent")
             .description("Background price and listing scout")

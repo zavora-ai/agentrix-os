@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use adk_agent::{LlmAgentBuilder, ParallelAgent, SequentialAgent};
-use adk_model::gemini::GeminiModel;
 
 use super::gemini;
 use super::stub;
@@ -29,7 +28,7 @@ async fn stay_agent(
     real_estate: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = real_estate {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("stay_agent", ts);
         let agent = LlmAgentBuilder::new("stay_agent")
             .description("Stay scout — real estate MCP")
@@ -67,7 +66,7 @@ async fn planner_agent(
     if let Some(m) = maps.clone() {
         parts.insert(0, m);
     }
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
     let merged = MergedToolset::new(parts);
     let tools = gemini::filtered_for_agent("planner_agent", merged);
     let agent = LlmAgentBuilder::new("planner_agent")

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use adk_agent::{CustomAgentBuilder, LlmConditionalAgent};
 use adk_core::{Content, Event, Part};
-use adk_model::gemini::GeminiModel;
 use adk_runner::Runner;
 use adk_core::{SessionId, UserId};
 use futures::{stream, StreamExt};
@@ -56,7 +55,7 @@ fn clarify_stub() -> Arc<dyn adk_core::Agent> {
 }
 
 pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
 
     let mut builder = LlmConditionalAgent::builder("intent_router", model)
         .description("Routes user intent to an Agentrix scenario")

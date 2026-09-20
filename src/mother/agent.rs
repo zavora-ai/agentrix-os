@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
 use adk_tool::FunctionTool;
 
 use crate::state::SessionStore;
@@ -35,7 +34,7 @@ pub async fn build(
     model_name: &str,
     sessions: SessionStore,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
 
     let store = sessions.clone();
     let get_context = FunctionTool::new(
@@ -85,7 +84,8 @@ pub async fn build(
         .tool(crate::memory::tools::read_memory_tool("mother"))
         .tool(crate::memory::tools::propose_memory_tool("mother"))
         .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.3),
+            // Claude 5-generation models reject explicit sampling; Gemini keeps 0.3.
+            temperature: crate::llm::allows_sampling(model_name).then_some(0.3),
             max_output_tokens: Some(1024),
             ..Default::default()
         })

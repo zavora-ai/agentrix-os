@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use adk_agent::{CustomAgentBuilder, LlmAgentBuilder, ParallelAgent, SequentialAgent};
 use adk_core::{Content, Event};
-use adk_model::gemini::GeminiModel;
 use futures::stream;
 
 use super::gemini;
@@ -111,7 +110,7 @@ async fn money_agent(
     banking: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = banking {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("money_agent", ts);
         let agent = LlmAgentBuilder::new("money_agent")
             .description("Money card — weekly spend")
@@ -144,7 +143,7 @@ async fn focus_agent(
     github: Option<Arc<dyn adk_core::Toolset>>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
     if let Some(ts) = github {
-        let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+        let model = crate::llm::build(api_key, model_name)?;
         let tools = gemini::filtered_for_agent("focus_agent", ts);
         let agent = LlmAgentBuilder::new("focus_agent")
             .description("Focus card — shipping and deep work")

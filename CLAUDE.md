@@ -22,7 +22,10 @@ and user-owned memory.
   Clone `https://github.com/zavora-ai/adk-rust` next to this repo before `cargo` anything.
 - `cp .env.example .env && cargo run` → http://localhost:9847. Add `?demo=1` for the offline,
   scripted UI (no server events). Keep demo mode working; marketing captures depend on it.
-- Everything degrades honestly: no `GOOGLE_API_KEY` → scenarios stream their mocks; no MCP
+- Text agents run on `TEXT_MODEL` (default `claude-fable-5-1`, needs `ANTHROPIC_API_KEY`) via
+  `src/llm.rs`; `claude-*` → Anthropic, anything else → Gemini. No Anthropic key but a
+  `GOOGLE_API_KEY` → text falls back to `GEMINI_MODEL`. Voice (`src/voice/`) is always Gemini Live.
+- Everything degrades honestly: no text-model key → scenarios stream their mocks; no MCP
   binaries → labeled stubs; no `DATABASE_URL` → in-memory sessions. Never make a feature *require*
   a live integration to compile or boot.
 - MCP servers are separate binaries built from the `mcp-servers` monorepo; paths are the

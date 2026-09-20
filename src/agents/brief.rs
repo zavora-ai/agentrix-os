@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
 
 use super::gemini;
 use crate::tools::merge::MergedToolset;
@@ -12,7 +11,7 @@ pub async fn build(
     news: Arc<dyn adk_core::Toolset>,
     weather: Arc<dyn adk_core::Toolset>,
 ) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
     let merged = MergedToolset::new(vec![news, weather]);
     let tools = gemini::filtered_for_agent("brief_agent", merged);
 

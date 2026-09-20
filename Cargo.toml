@@ -15,7 +15,7 @@ adk-awp = { path = "../adk-rust/adk-awp" }
 awp-types = { path = "../adk-rust/awp-types" }
 arc-swap = "1"
 adk-core = { path = "../adk-rust/adk-core" }
-adk-model = { path = "../adk-rust/adk-model", features = ["gemini"] }
+adk-model = { path = "../adk-rust/adk-model", features = ["gemini", "anthropic"] }
 adk-realtime = { path = "../adk-rust/adk-realtime", features = ["gemini"] }
 adk-runner = { path = "../adk-rust/adk-runner" }
 adk-session = { path = "../adk-rust/adk-session" }

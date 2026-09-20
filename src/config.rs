@@ -28,6 +28,10 @@ pub struct AppConfig {
     pub mcp_maps_path: PathBuf,
     pub mcp_real_estate_path: PathBuf,
     pub google_api_key: Option<String>,
+    pub anthropic_api_key: Option<String>,
+    /// Preferred text model; `claude-*` runs on Anthropic, anything else on Gemini.
+    pub text_model: String,
+    /// Gemini text model, used when `text_model` is Gemini or as the fallback.
     pub gemini_model: String,
     pub gemini_live_model: String,
     pub voice_name: String,
@@ -146,6 +150,10 @@ impl AppConfig {
                 "../mcp-servers/mcp-real-estate/target/release/mcp-real-estate",
             ),
             google_api_key: std::env::var("GOOGLE_API_KEY").ok().filter(|k| !k.is_empty()),
+            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty()),
+            text_model: std::env::var("TEXT_MODEL").unwrap_or_else(|_| "claude-fable-5-1".into()),
             gemini_model: std::env::var("GEMINI_MODEL")
                 .unwrap_or_else(|_| "gemini-3.1-flash-lite".into()),
             gemini_live_model: std::env::var("GEMINI_LIVE_MODEL").unwrap_or_else(|_| {
@@ -208,8 +216,18 @@ impl AppConfig {
         format!("{}:{}", self.host, self.port)
     }
 
+    /// Key and model for the text agents, or `None` when no usable key is set.
+    pub fn text_backend(&self) -> Option<crate::llm::TextBackend> {
+        crate::llm::select_text_backend(
+            &self.text_model,
+            self.anthropic_api_key.as_deref(),
+            self.google_api_key.as_deref(),
+            &self.gemini_model,
+        )
+    }
+
     pub fn deck_enabled(&self) -> bool {
-        self.google_api_key.is_some()
+        self.text_backend().is_some()
     }
 
     pub fn agents_enabled(&self) -> bool {

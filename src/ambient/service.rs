@@ -187,10 +187,10 @@ pub async fn boot(
     session_service: SharedSessionService,
     event_service: Arc<InMemoryEventSubscriptionService>,
 ) -> anyhow::Result<AmbientService> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("ambient requires API key");
+    let backend = config
+        .text_backend()
+        .expect("ambient requires a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let fast = std::env::var("AMBIENT_FAST").ok().as_deref() == Some("1");
     let research_cron = std::env::var("AMBIENT_RESEARCH_CRON")
@@ -234,14 +234,14 @@ pub async fn boot(
     }
 
     let research_agent =
-        research::build(api_key, &config.gemini_model, pool.news.clone()).await?;
+        research::build(api_key, &backend.model, pool.news.clone()).await?;
     let scout_agent = scout::build(
         api_key,
-        &config.gemini_model,
+        &backend.model,
         pool.real_estate.clone(),
     )
     .await?;
-    let maker_agent = maker::build(api_key, &config.gemini_model).await?;
+    let maker_agent = maker::build(api_key, &backend.model).await?;
 
     let research_runner = Arc::new(
         Runner::builder()

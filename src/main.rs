@@ -116,6 +116,16 @@ async fn main() -> anyhow::Result<()> {
     let mut deck_mcp = None;
     let mut deck_enabled = false;
 
+    match config.text_backend() {
+        Some(b) if b.fallback => tracing::warn!(
+            model = %b.model,
+            "ANTHROPIC_API_KEY not set — text agents fall back to Gemini (TEXT_MODEL={})",
+            config.text_model
+        ),
+        Some(b) => tracing::info!(model = %b.model, "text agents"),
+        None => tracing::warn!("no text-model key (ANTHROPIC_API_KEY / GOOGLE_API_KEY) — agents use mocks"),
+    }
+
     if config.agents_enabled() {
         match boot_deck_stack(&config, session_service.clone()).await {
             Ok((deck, combine, pool)) => {
@@ -502,10 +512,10 @@ async fn boot_deck_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<Runner>, Arc<McpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let worksheet = tools::mcp::spawn_mcp_server(&config.mcp_worksheet_path).await?;
     let docx = tools::mcp::spawn_mcp_server(&config.mcp_docx_path).await?;
@@ -522,9 +532,9 @@ async fn boot_deck_stack(
         slides: Arc::new(slides),
     });
 
-    let workflow = deck::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = deck::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
     let combine_agent =
-        spatial_os::agents::combine::build(api_key, &config.gemini_model, pool.slides.clone())
+        spatial_os::agents::combine::build(api_key, &backend.model, pool.slides.clone())
             .await?;
 
     let deck_runner = Arc::new(
@@ -550,10 +560,10 @@ async fn boot_morning_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<MorningMcpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let news = tools::mcp::spawn_mcp_server(&config.mcp_news_path).await?;
     let weather = tools::mcp::spawn_mcp_server(&config.mcp_weather_path).await?;
@@ -588,7 +598,7 @@ async fn boot_morning_stack(
         weather: Arc::new(weather),
     });
 
-    let workflow = morning::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = morning::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
 
     let runner = Arc::new(
         Runner::builder()
@@ -606,11 +616,11 @@ async fn boot_mother_stack(
     session_service: SharedSessionService,
     sessions: SessionStore,
 ) -> anyhow::Result<Arc<Runner>> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
-    let agent = spatial_os::mother::agent::build(api_key, &config.gemini_model, sessions).await?;
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
+    let agent = spatial_os::mother::agent::build(api_key, &backend.model, sessions).await?;
     Ok(Arc::new(
         Runner::builder()
             .app_name("agentrix-os-mother")
@@ -624,14 +634,14 @@ async fn boot_coordinator_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<Runner>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let router_agent =
-        spatial_os::agents::router::build(api_key, &config.gemini_model).await?;
-    let suzy_agent = spatial_os::agents::suzy::build(api_key, &config.gemini_model).await?;
+        spatial_os::agents::router::build(api_key, &backend.model).await?;
+    let suzy_agent = spatial_os::agents::suzy::build(api_key, &backend.model).await?;
 
     let router_runner = Arc::new(
         Runner::builder()
@@ -656,10 +666,10 @@ async fn boot_live_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<LiveMcpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let news = tools::mcp::spawn_mcp_server(&config.mcp_news_path).await?;
     let n = tools::mcp::health_check(&news).await?;
@@ -674,7 +684,7 @@ async fn boot_live_stack(
         market_data,
     });
 
-    let workflow = live::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = live::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
             .app_name("agentrix-os-live")
@@ -689,10 +699,10 @@ async fn boot_people_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<PeopleMcpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let slack = tools::mcp::try_spawn_mcp_server(&config.mcp_slack_path)
         .await
@@ -710,7 +720,7 @@ async fn boot_people_stack(
         calendar,
     });
 
-    let workflow = people::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = people::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
             .app_name("agentrix-os-people")
@@ -725,10 +735,10 @@ async fn boot_week_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<WeekMcpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let banking = tools::mcp::try_spawn_mcp_server(&config.mcp_banking_path)
@@ -744,7 +754,7 @@ async fn boot_week_stack(
         health_csv: week::health_csv_from_env(&manifest_dir),
     });
 
-    let workflow = week::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = week::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
             .app_name("agentrix-os-week")
@@ -759,13 +769,13 @@ async fn boot_greeting_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<Arc<Runner>> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let agent =
-        spatial_os::greeting::agent::build(api_key, &config.gemini_model).await?;
+        spatial_os::greeting::agent::build(api_key, &backend.model).await?;
 
     session_service
         .create(CreateRequest {
@@ -822,10 +832,10 @@ async fn boot_lisbon_stack(
     config: &AppConfig,
     session_service: SharedSessionService,
 ) -> anyhow::Result<(Arc<Runner>, Arc<LisbonMcpPool>)> {
-    let api_key = config
-        .google_api_key
-        .as_deref()
-        .expect("agents_enabled implies API key");
+    let backend = config
+        .text_backend()
+        .expect("agents_enabled implies a text-model key");
+    let api_key = backend.api_key.as_str();
 
     let weather = tools::mcp::spawn_mcp_server(&config.mcp_weather_path).await?;
     let w = tools::mcp::health_check(&weather).await?;
@@ -844,7 +854,7 @@ async fn boot_lisbon_stack(
         real_estate,
     });
 
-    let workflow = lisbon::build_workflow(api_key, &config.gemini_model, pool.as_ref()).await?;
+    let workflow = lisbon::build_workflow(api_key, &backend.model, pool.as_ref()).await?;
     let runner = Arc::new(
         Runner::builder()
             .app_name("agentrix-os-lisbon")

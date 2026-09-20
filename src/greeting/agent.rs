@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Content, SessionId, UserId};
-use adk_model::gemini::GeminiModel;
 use adk_runner::Runner;
 use futures::StreamExt;
 
 use super::context::GreetingSnapshot;
 
 pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn adk_core::Agent>> {
-    let model = Arc::new(GeminiModel::new(api_key, model_name)?);
+    let model = crate::llm::build(api_key, model_name)?;
 
     let agent = LlmAgentBuilder::new("greeting_agent")
         .description("Composes a personalized one- or two-sentence greeting from verified integration facts")

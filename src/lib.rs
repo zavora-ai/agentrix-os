@@ -3,6 +3,7 @@ pub mod agents;
 pub mod briefing;
 pub mod domain;
 pub mod intelligence;
+pub mod llm;
 pub mod memory;
 pub mod mother;
 pub mod permissions;
