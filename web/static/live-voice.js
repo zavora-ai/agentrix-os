@@ -3,7 +3,8 @@
  * One Live session carries two independent inputs: the microphone (PCM up, Suzy's speech back)
  * and the camera (JPEG frames up about once a second, gestures back as `agentrix:gesture`).
  * Either runs alone; the session opens with the first input and closes with the last.
- * Falls back to prerecorded clips + SpeechRecognition when Live is unavailable.
+ * Suzy's voice comes only from here: there are no prerecorded clips. When Live is unavailable
+ * the page shows captions and the mic falls back to the browser's SpeechRecognition.
  */
 (function () {
   'use strict';
@@ -89,6 +90,18 @@
     nextPlayTime = 0;
   }
 
+  /** Seconds of speech still queued. Gemini streams a reply faster than real time, so at
+   *  `response_done` most of it is usually still waiting to be played. */
+  function queuedSeconds() {
+    if (!playbackCtx) return 0;
+    return Math.max(0, nextPlayTime - playbackCtx.currentTime);
+  }
+
+  /** Run `fn` once everything queued has been heard (plus a short tail), not before. */
+  function afterPlayback(fn) {
+    setTimeout(fn, queuedSeconds() * 1000 + 250);
+  }
+
   // ---- messages from the server ----------------------------------------------------------
 
   function handleMessage(ev) {
@@ -137,8 +150,15 @@
       }
       if (msg.type === 'response_done') {
         emit('agentrix:voice-transcript', { role: 'assistant', done: true });
-        // A session opened only to speak (greeting) has nothing left to do.
-        if (!micActive && !cameraActive) closeSession();
+        // A session opened only to speak (greeting, a summary) has nothing left to do once
+        // the queued audio has actually been heard — closing on the event itself cut Suzy
+        // off mid-sentence, because the chunks arrive well ahead of playback.
+        if (!micActive && !cameraActive) {
+          const sock = ws;
+          afterPlayback(() => {
+            if (ws === sock && !micActive && !cameraActive) closeSession();
+          });
+        }
       }
       if (msg.type === 'tool_call') {
         // adk-realtime forwards tool arguments as the raw JSON string the model produced.
@@ -168,6 +188,7 @@
       if (msg.type === 'error') {
         console.warn('live voice:', msg.message);
         flushPlayback();
+        emit('agentrix:voice-error', { message: msg.message });
       }
       return;
     }
@@ -198,15 +219,16 @@
         resolve(ok);
       };
       sock.onerror = () => {
-        if (ws === sock) closeSession();
+        if (ws === sock) closeSession({ flush: true });
         settle(false);
       };
       sock.onclose = () => {
         if (ws === sock) {
+          // The socket going away is not an interruption: whatever Suzy already sent keeps
+          // playing to the end. Only barge-in and errors flush the queue.
           ws = null;
           stopMicCapture();
           stopCameraCapture();
-          flushPlayback();
         }
         settle(false);
       };
@@ -224,7 +246,7 @@
     return connecting;
   }
 
-  function closeSession() {
+  function closeSession(opts) {
     const sock = ws;
     ws = null;
     if (sock) {
@@ -234,7 +256,13 @@
     }
     stopMicCapture();
     stopCameraCapture();
+    if (opts?.flush) flushPlayback();
+  }
+
+  /** Cut Suzy off (the user moved on): drop queued speech; a speak-only session ends here. */
+  function stopSpeaking() {
     flushPlayback();
+    if (!micActive && !cameraActive) closeSession();
   }
 
   function maybeCloseSession() {
@@ -393,11 +421,15 @@
 
   // ---- speech only (greeting) --------------------------------------------------------------
 
+  /** Have Suzy say `text` aloud (greeting, a summary). The server frames it as a read-aloud
+   *  request so the model speaks the words instead of answering them as a user turn. */
   async function speakText(text) {
     if (!enabled) return false;
+    const plain = String(text || '').trim();
+    if (!plain) return false;
     const ok = await ensureSession({});
     if (!ok || !ws) return false;
-    ws.send(JSON.stringify({ type: 'text', content: text }));
+    ws.send(JSON.stringify({ type: 'speak', content: plain }));
     return true;
   }
 
@@ -429,6 +461,8 @@
     isCameraActive: () => cameraActive,
     // session
     speakText,
+    stopSpeaking,
+    queuedSeconds,
     isEnabled: () => enabled,
     isActive: () => sessionOpen(),
     // legacy names (mic)

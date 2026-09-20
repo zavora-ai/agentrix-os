@@ -12,6 +12,8 @@ pub struct VoiceState {
     pub enabled: bool,
     pub model: Option<Arc<GeminiRealtimeModel>>,
     pub voice_name: String,
+    /// Spoken language pinned for the session (`VOICE_LANGUAGE`), see `AppConfig::voice_language`.
+    pub language: Option<String>,
     /// Camera channel (M10-T5): frames over `/ws/voice`, gestures back as `ui_gesture` tool calls.
     pub camera: bool,
 }
@@ -23,6 +25,7 @@ impl VoiceState {
                 enabled: false,
                 model: None,
                 voice_name: config.voice_name.clone(),
+                language: config.voice_language.clone(),
                 camera: false,
             };
         };
@@ -37,6 +40,7 @@ impl VoiceState {
             enabled: true,
             model: Some(model),
             voice_name: config.voice_name.clone(),
+            language: config.voice_language.clone(),
             camera: config.camera_enabled,
         }
     }

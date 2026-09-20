@@ -35,7 +35,6 @@ pub fn stream_clarify(message: String) -> Response {
             .send(Ok(to_event(&FieldEvent::SuzySummary {
                 key: "clarify".into(),
                 html: message,
-                audio_clip: None,
             })))
             .await;
         for key in ["morning", "deck", "lisbon"] {

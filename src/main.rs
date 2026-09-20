@@ -482,10 +482,6 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = api.layer(Extension(session_store));
 
-    if Path::new(&config.audio_dir).exists() {
-        app = app.nest_service("/audio", ServeDir::new(&config.audio_dir));
-    }
-
     if Path::new(&config.static_dir).exists() {
         app = app.nest_service("/static", ServeDir::new(&config.static_dir));
     }

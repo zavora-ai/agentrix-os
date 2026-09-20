@@ -25,14 +25,34 @@ pub const INPUT_RATE_HZ: u32 = 16_000;
 pub const OUTPUT_RATE_HZ: u32 = 24_000;
 
 /// Session config shared by the voice websocket and the tests.
-pub fn suzy_config(instruction: &str, voice: &str) -> RealtimeConfig {
-    RealtimeConfig::default()
+pub fn suzy_config(instruction: &str, voice: &str, language: Option<&str>) -> RealtimeConfig {
+    let mut cfg = RealtimeConfig::default()
         .with_instruction(instruction)
         .with_voice(voice)
         // Server-side turn detection; a new user turn interrupts the model's reply.
         .with_vad(VadConfig::server_vad().with_interrupt(true))
         // Input + output transcription (Gemini enables both from this one switch).
-        .with_transcription()
+        .with_transcription();
+    // Pin the spoken language: without `speechConfig.languageCode` Gemini guesses per turn and
+    // short or accented English came back transcribed as Spanish. Written to `extra` so this
+    // builds against adk-realtime with or without `RealtimeConfig::with_language`
+    // (zavora-ai/adk-rust: feat/realtime-gemini-language-code reads the same key).
+    if let Some(code) = language.map(str::trim).filter(|c| !c.is_empty()) {
+        let mut extra = cfg.extra.take().unwrap_or_else(|| json!({}));
+        extra["language_code"] = json!(code);
+        cfg.extra = Some(extra);
+    }
+    cfg
+}
+
+/// Wrap text the UI wants said aloud (greeting, a summary) so the model reads it instead of
+/// treating it as something the user said and replying to it.
+pub fn read_aloud_prompt(text: &str) -> String {
+    format!(
+        "Read the following to the user now, word for word, warmly, in English. Do not add a \
+         reply, a question, or commentary, and do not call any tool:\n{}",
+        text.trim()
+    )
 }
 
 /// `get_session_context` — the browser session's scenario, cards and artifacts.
@@ -84,12 +104,17 @@ impl ToolHandler for SubmitIntentTool {
                 (record.session_id, record.user_id)
             }
         };
+        // Conclusive on purpose: a bare "started" read like an unfinished job and the model
+        // called submit_intent again for the same request instead of speaking.
         Ok(json!({
-            "status": "started",
+            "status": "accepted",
             "session_id": session_id,
             "user_id": user_id,
             "intent": text,
-            "dispatch": "client_sse"
+            "dispatch": "client_sse",
+            "next": "Done — the Mother Agent is on it. The result appears on screen and is read \
+                     aloud to the user automatically. Tell the user in one short sentence that \
+                     it is underway. Do not call submit_intent again for this request."
         }))
     }
 }
@@ -107,8 +132,12 @@ pub async fn build_suzy_runner(
     let mut instruction = String::from(
         "You are Suzy — warm, confident, quietly witty voice of the Mother Agent in Agentrix Personal AI OS. \
          Help the user express intent, start their day, and let the Mother Agent orchestrate the specialized agents. \
-         When they ask what they need to know today (or for their briefing), call submit_intent with exactly that and read the summary aloud. \
-         Keep replies concise and spoken-friendly (1–3 sentences unless they ask for detail).",
+         When they ask what they need to know today (or for their briefing), or to do something that should spawn field cards, \
+         call submit_intent once with exactly that. The result is shown and read aloud automatically; after the call, say one \
+         short sentence that it is underway and never repeat the same submit_intent. \
+         Keep replies concise and spoken-friendly (1–3 sentences unless they ask for detail).\n\
+         The user speaks English. Listen for, transcribe and reply in English only, even when a \
+         word or name could belong to another language; never switch languages on your own.",
     );
     if let Some(tone) = &state.brand_tone {
         instruction.push_str(&format!("\nBrand tone: {tone}."));
@@ -132,7 +161,7 @@ pub async fn build_suzy_runner(
 
     let mut builder = RealtimeRunner::builder()
         .model(model)
-        .config(suzy_config(&instruction, &state.voice.voice_name))
+        .config(suzy_config(&instruction, &state.voice.voice_name, state.voice.language.as_deref()))
         .tool(
             ToolDefinition {
                 name: "get_session_context".into(),
@@ -208,7 +237,7 @@ mod tests {
 
     #[test]
     fn suzy_config_enables_server_vad_interruption_and_transcription() {
-        let cfg = suzy_config("You are Suzy.", "Aoede");
+        let cfg = suzy_config("You are Suzy.", "Aoede", Some("en-US"));
         let vad = cfg.turn_detection.expect("server VAD configured");
         assert_eq!(vad.mode, VadMode::ServerVad);
         assert_eq!(vad.interrupt_response, Some(true), "a new user turn interrupts the reply");
@@ -216,6 +245,23 @@ mod tests {
         assert_eq!(cfg.voice.as_deref(), Some("Aoede"));
         assert!(cfg.instruction.as_deref().unwrap_or("").contains("Suzy"));
         assert_eq!((INPUT_RATE_HZ, OUTPUT_RATE_HZ), (16_000, 24_000));
+        assert_eq!(cfg.extra.as_ref().and_then(|e| e.get("language_code")), Some(&json!("en-US")));
+    }
+
+    #[test]
+    fn suzy_config_leaves_the_language_unpinned_only_when_asked() {
+        assert!(suzy_config("x", "Aoede", None).extra.is_none());
+        assert!(suzy_config("x", "Aoede", Some("  ")).extra.is_none());
+        let cfg = suzy_config("x", "Aoede", Some("en-GB"));
+        assert_eq!(cfg.extra.unwrap()["language_code"], json!("en-GB"));
+    }
+
+    #[test]
+    fn read_aloud_prompt_carries_the_text_and_forbids_a_reply() {
+        let p = read_aloud_prompt("  Good morning. Two meetings today.  ");
+        assert!(p.ends_with("Good morning. Two meetings today."));
+        assert!(p.contains("word for word"));
+        assert!(p.contains("do not call any tool"));
     }
 
     #[tokio::test]
