@@ -1518,7 +1518,7 @@ function resolve(card, s, spec){
   card.stText.textContent = 'done';
   card.el.dataset.title = s.title;
   agentDone(s);
-  card.el.querySelector('.gist').textContent = r.big ? `${r.big} · ${r.sub}` : (r.lines ? r.lines[0].replace(/<[^>]+>/g,'') : s.title);
+  card.el.querySelector('.gist').textContent = r.big ? `${htmlText(r.big)} · ${htmlText(r.sub)}` : (r.lines ? htmlText(r.lines[0]) : s.title);
   fillDetail(card.el, s);
 
   r.actions.forEach((label, k) => {
@@ -1629,6 +1629,11 @@ function pcmToWav(pcm, rate){
   v.setUint16(34,16,true); ws(36,'data'); v.setUint32(40, pcm.length, true);
   new Uint8Array(buf, 44).set(pcm);
   return buf;
+}
+
+// Card HTML (escaped on the server) as plain text for textContent; a DOMParser document is inert.
+function htmlText(html){
+  return new DOMParser().parseFromString(String(html ?? ''), 'text/html').body.textContent;
 }
 
 function addLine(parent, html, delay){
