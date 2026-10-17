@@ -3,6 +3,7 @@ use std::sync::Arc;
 use adk_runner::Runner;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::orchestrator::fallback;
 use crate::orchestrator::workflow::{stream_workflow, AgentSlot, WorkflowStreamConfig};
 use crate::state::SessionStore;
 
@@ -32,66 +33,35 @@ fn status_line(tool: &str) -> &'static str {
     }
 }
 
-fn flights_resolve(text: &str) -> serde_json::Value {
+/// Flights is always the BK-009 labeled stub: no flight search exists yet.
+fn flights_resolve() -> serde_json::Value {
     serde_json::json!({
         "big": "$284 · TAP Air (stub)",
-        "sub": if text.contains("STUB") {
-            "Not a live quote — BK-009 travel gap"
-        } else {
-            "Fri 6:40pm → Sun 9:15pm · 1 stop"
-        },
+        "sub": "Not a live quote — BK-009 travel gap",
         "actions": ["Hold seat", "Compare"]
     })
 }
 
-fn stay_resolve(text: &str) -> serde_json::Value {
-    let stub = text.contains("STUB");
-    serde_json::json!({
-        "big": if stub { "Alfama loft (stub)" } else { "Stay found" },
-        "sub": if stub { "Scout only — connect mcp-real-estate" } else { "$96/night · river view" },
-        "actions": ["Reserve", "See 6 more"]
-    })
+fn stay_resolve(agent_text: &str) -> serde_json::Value {
+    if agent_text.contains("STUB") {
+        return serde_json::json!({
+            "big": "Alfama loft (stub)",
+            "sub": "Scout only — connect mcp-real-estate",
+            "actions": ["Reserve", "See 6 more"]
+        });
+    }
+    fallback::lines_or_unavailable(agent_text, "Stay search returned nothing this time", &["Reserve", "See more"])
 }
 
-fn planner_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| {
-            if l.starts_with("<b>") {
-                l.to_string()
-            } else {
-                format!("<b>•</b> {l}")
-            }
-        })
-        .collect();
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>Fri</b> — arrive, sunset at Miradouro".into(),
-            "<b>Sat</b> — Sintra day trip".into(),
-            "<b>Sun</b> — fly home".into(),
-        ]
-    } else {
-        lines
-    };
-    serde_json::json!({
-        "lines": lines,
-        "actions": ["Save plan", "Tweak"]
-    })
+fn planner_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "Itinerary returned nothing this time", &["Save plan", "Tweak"])
 }
 
-fn resolve(author: &str, tool_text: &str, agent_text: &str) -> serde_json::Value {
-    let combined = if agent_text.is_empty() {
-        tool_text.to_string()
-    } else {
-        format!("{tool_text}\n{agent_text}")
-    };
+fn resolve(author: &str, _tool_text: &str, agent_text: &str) -> serde_json::Value {
     match author {
-        "flights_agent" => flights_resolve(&combined),
-        "stay_agent" => stay_resolve(&combined),
-        "planner_agent" => planner_resolve(&combined),
+        "flights_agent" => flights_resolve(),
+        "stay_agent" => stay_resolve(agent_text),
+        "planner_agent" => planner_resolve(agent_text),
         _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
     }
 }

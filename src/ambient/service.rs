@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::agents::ambient::{maker, research, scout};
 use crate::ambient::store::AmbientStore;
+use crate::orchestrator::fallback;
 use crate::config::AppConfig;
 
 pub struct AmbientMcpPool {
@@ -29,79 +30,70 @@ pub struct AmbientService {
 fn research_resolve(text: &str) -> serde_json::Value {
     serde_json::json!({
         "big": "Brief ready",
-        "sub": text.lines().next().unwrap_or("ABC Corp research").chars().take(72).collect::<String>(),
+        "sub": fallback::first_line(text, 72).unwrap_or_default(),
         "actions": ["Open", "Save"]
     })
 }
 
+/// The scout reports what it found in its own words; the card never asserts a drop or offers to buy.
 fn scout_resolve(text: &str) -> serde_json::Value {
     serde_json::json!({
-        "big": "Price dropped",
-        "sub": text.lines().next().unwrap_or("12% overnight on watched listing").chars().take(72).collect::<String>(),
-        "actions": ["Buy now", "Keep watching"]
+        "big": if text.contains("STUB") { "Scout (stub)" } else { "Scout update" },
+        "sub": fallback::first_line(text, 72).unwrap_or_default(),
+        "actions": ["Open", "Keep watching"]
     })
 }
 
 fn maker_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| format!("<b>•</b> {l}"))
-        .collect();
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>•</b> Drafted a weekend playlist".into(),
-            "<b>•</b> Sketched 3 logo ideas".into(),
-            "<b>•</b> Wrote a trip shortlist".into(),
-        ]
-    } else {
-        lines
-    };
     serde_json::json!({
-        "lines": lines,
+        "lines": fallback::agent_lines(text, 3),
         "actions": ["Show me", "Discard"]
     })
 }
 
-async fn extract_agent_text(runner: &Runner, user_id: &str, session_id: &str, prompt: &str) -> String {
-    let Ok(uid) = UserId::try_from(user_id) else {
-        return String::new();
-    };
-    let Ok(sid) = SessionId::try_from(session_id) else {
-        return String::new();
-    };
-
-    let Ok(mut stream) = runner
+/// Run one ambient prompt and collect the agent's text. A failed run or an empty answer is an
+/// error, never an empty string for the resolvers to dress up as a finding (rule 1).
+async fn extract_agent_text(runner: &Runner, user_id: &str, session_id: &str, prompt: &str) -> anyhow::Result<String> {
+    let uid = UserId::try_from(user_id)?;
+    let sid = SessionId::try_from(session_id)?;
+    let mut stream = runner
         .run(uid, sid, Content::new("user").with_text(prompt))
-        .await
-    else {
-        return String::new();
-    };
+        .await?;
 
     let mut text = String::new();
     while let Some(chunk) = stream.next().await {
-        if let Ok(ev) = chunk {
-            if let Some(content) = ev.content() {
-                for part in &content.parts {
-                    if let Some(t) = part.text() {
-                        text.push_str(t);
-                    }
+        if let Some(content) = chunk?.content() {
+            for part in &content.parts {
+                if let Some(t) = part.text() {
+                    text.push_str(t);
                 }
             }
         }
     }
-    text.trim().to_string()
+    let text = text.trim().to_string();
+    anyhow::ensure!(!text.is_empty(), "empty answer");
+    Ok(text)
 }
 
+/// Record a cycle's outcome. Only a real answer becomes a card and an AWP `proactive.completed`
+/// event; a failed cycle shows as unavailable and sends nothing.
 async fn on_agent_done(
     store: &AmbientStore,
     event_service: &Arc<InMemoryEventSubscriptionService>,
     agent_id: &str,
     task: &str,
-    text: &str,
+    result: anyhow::Result<String>,
 ) {
+    let text = match result {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::warn!(agent = agent_id, "ambient cycle produced nothing ({e:#})");
+            let resolve = fallback::unavailable("Nothing came back this cycle");
+            store.set_done(agent_id, task, resolve, None).await;
+            return;
+        }
+    };
+    let text = text.as_str();
     let resolve = match agent_id {
         "research" => research_resolve(text),
         "scout" => scout_resolve(text),
@@ -157,14 +149,14 @@ fn spawn_ambient(
                 return Ok(Box::pin(stream::empty()) as adk_core::EventStream);
             }
             store.set_working(aid, task).await;
-            let text = extract_agent_text(
+            let result = extract_agent_text(
                 &runner,
                 "ambient-user",
                 &format!("ambient-{aid}"),
                 prompt,
             )
             .await;
-            on_agent_done(&store, &es, aid, task, &text).await;
+            on_agent_done(&store, &es, aid, task, result).await;
             Ok(Box::pin(stream::empty()) as adk_core::EventStream)
         })
     });
@@ -305,4 +297,28 @@ pub async fn boot(
         _store: store,
         _handles: handles,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_ambient_cycle_is_unavailable_and_sends_no_event() {
+        let store = AmbientStore::new();
+        let events = Arc::new(InMemoryEventSubscriptionService::new());
+        on_agent_done(&store, &events, "scout", "watching prices", Err(anyhow::anyhow!("model error"))).await;
+        let rec = store.get("scout").await.expect("scout record");
+        let resolve = rec.resolve.expect("resolve");
+        assert_eq!(resolve["big"], "Unavailable");
+        assert!(rec.summary.is_none());
+        assert!(!resolve.to_string().contains("12%"));
+    }
+
+    #[test]
+    fn scout_card_never_asserts_a_drop_or_offers_to_buy() {
+        let r = scout_resolve("No notable price changes on watched listings today.");
+        assert_eq!(r["big"], "Scout update");
+        assert!(!r["actions"].to_string().contains("Buy"));
+    }
 }

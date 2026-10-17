@@ -3,6 +3,7 @@ use std::sync::Arc;
 use adk_runner::Runner;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::orchestrator::fallback;
 use crate::orchestrator::workflow::{stream_workflow, AgentSlot, WorkflowStreamConfig};
 use crate::state::SessionStore;
 
@@ -27,60 +28,47 @@ fn status_line(_tool: &str) -> &'static str {
     "Working…"
 }
 
-fn money_resolve(text: &str) -> serde_json::Value {
-    let stub = text.contains("STUB");
-    serde_json::json!({
-        "big": if stub { "−$1,240 (stub)" } else { "Weekly spend" },
-        "sub": text.lines().next().unwrap_or("vs last week").chars().take(60).collect::<String>(),
-        "actions": ["Breakdown", "Set limit"]
-    })
+fn money_resolve(agent_text: &str) -> serde_json::Value {
+    if agent_text.contains("STUB") {
+        return serde_json::json!({
+            "big": "−$1,240 (stub)",
+            "sub": "STUB — connect mcp-banking · sample total",
+            "actions": ["Breakdown", "Set limit"]
+        });
+    }
+    match fallback::first_line(agent_text, 72) {
+        Some(sub) => serde_json::json!({ "big": "Weekly spend", "sub": sub, "actions": ["Breakdown", "Set limit"] }),
+        None => fallback::unavailable("Banking returned nothing this time"),
+    }
 }
 
-fn health_resolve(text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "big": if text.contains("avg sleep") {
-            text.split("avg sleep").nth(1).unwrap_or("6.1h").trim().chars().take(20).collect::<String>()
-        } else {
-            "6.1h avg sleep".into()
-        },
-        "sub": if text.contains("STUB") { "STUB — set HEALTH_CSV_PATH" } else { "Imported health data" },
-        "actions": ["Tips", "Plan rest"]
-    })
+/// Hours after `avg sleep` in the health agent's text (`avg sleep 6.4h · …`).
+fn avg_sleep(text: &str) -> Option<String> {
+    let after = text.split("avg sleep").nth(1)?.split_whitespace().next()?;
+    let hours = after.trim_end_matches('h').parse::<f64>().ok()?;
+    Some(format!("{hours:.1}h avg sleep"))
 }
 
-fn focus_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| format!("<b>•</b> {l}"))
-        .collect();
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>•</b> Shipped 14 commits, 2 features".into(),
-            "<b>•</b> Most focused: Tue mornings".into(),
-            "<b>•</b> Suggest: protect Tue 9–12".into(),
-        ]
-    } else {
-        lines
-    };
-    serde_json::json!({
-        "lines": lines,
-        "actions": ["Apply", "Ignore"]
-    })
+fn health_resolve(agent_text: &str) -> serde_json::Value {
+    let actions = ["Tips", "Plan rest"];
+    if agent_text.contains("STUB") {
+        return serde_json::json!({ "big": "6.1h avg sleep (stub)", "sub": "STUB — set HEALTH_CSV_PATH", "actions": actions });
+    }
+    match avg_sleep(agent_text) {
+        Some(big) => serde_json::json!({ "big": big, "sub": "Imported health data", "actions": actions }),
+        None => fallback::lines_or_unavailable(agent_text, "Health data returned nothing this time", &actions),
+    }
 }
 
-fn resolve(author: &str, tool_text: &str, agent_text: &str) -> serde_json::Value {
-    let combined = if agent_text.is_empty() {
-        tool_text.to_string()
-    } else {
-        format!("{tool_text}\n{agent_text}")
-    };
+fn focus_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "GitHub activity returned nothing this time", &["Apply", "Ignore"])
+}
+
+fn resolve(author: &str, _tool_text: &str, agent_text: &str) -> serde_json::Value {
     match author {
-        "money_agent" => money_resolve(&combined),
-        "health_agent" => health_resolve(&combined),
-        "focus_agent" => focus_resolve(&combined),
+        "money_agent" => money_resolve(agent_text),
+        "health_agent" => health_resolve(agent_text),
+        "focus_agent" => focus_resolve(agent_text),
         _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
     }
 }

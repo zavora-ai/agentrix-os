@@ -125,7 +125,7 @@ async fn mock_combine_action_stream_completes_with_events() {
     use std::time::Duration;
 
     let result = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut stream = mock::stream_action("combine", Some("deck"), "combine");
+        let mut stream = mock::stream_action("combine", Some("deck"), "combine", false);
         let mut count = 0usize;
         while let Some(item) = stream.next().await {
             let _ = item.expect("sse event");
@@ -140,6 +140,37 @@ async fn mock_combine_action_stream_completes_with_events() {
         result >= 3,
         "deck combine mock should emit conduct + deck_finish + done, got {result}"
     );
+}
+
+/// A live deployment whose deck runner did not boot streams the scripted deck, labeled (rule 1).
+#[tokio::test]
+async fn mock_deck_stream_labels_simulated_cards_in_live_deployments() {
+    use axum::response::{IntoResponse, Sse};
+
+    let stream = mock::stream_intent_with_scenario("deck", "Build me a pitch deck", true, None, None);
+    let events = spatial_os::orchestrator::sse_collect::collect_sse_events(Sse::new(stream).into_response()).await;
+
+    let of = |kind: &str| events.iter().filter(move |e| e["type"] == kind).collect::<Vec<_>>();
+    assert_eq!(of("card_spawn").len(), 3);
+    assert!(of("card_spawn").iter().all(|e| e["card"]["simulated"] == true));
+    for e in of("card_resolve") {
+        assert_eq!(e["resolve"]["simulated"], true);
+        assert!(e["resolve"]["sub"].as_str().unwrap().starts_with("Simulated sample"), "{e}");
+    }
+    let summary = of("suzy_summary")[0]["html"].as_str().unwrap().to_string();
+    assert!(summary.contains("simulated samples"), "{summary}");
+    assert_ne!(summary, mock::suzy_summary("deck"));
+}
+
+#[tokio::test]
+async fn mock_combine_action_on_simulated_deck_builds_nothing() {
+    use axum::response::{IntoResponse, Sse};
+
+    let stream = mock::stream_action("combine", Some("deck"), "combine", true);
+    let events = spatial_os::orchestrator::sse_collect::collect_sse_events(Sse::new(stream).into_response()).await;
+    assert!(events.iter().all(|e| e["type"] != "deck_finish"), "{events:?}");
+    assert!(events.iter().any(|e| e["type"] == "suzy_summary"
+        && e["html"].as_str().unwrap_or("").contains("simulated sample")));
 }
 
 #[test]
@@ -569,6 +600,57 @@ fn offline_app_state() -> spatial_os::state::AppState {
         None,
         spatial_os::voice::VoiceState::boot(&config),
     )
+}
+
+#[tokio::test]
+async fn voice_state_status_says_why_and_keeps_local_gestures() {
+    use axum::extract::State;
+
+    let state = offline_app_state();
+    let gestures = state.voice.gestures;
+    let status = |state: spatial_os::state::AppState| async move {
+        let axum::Json(s) = spatial_os::routes::voice::status(State(state)).await;
+        serde_json::to_value(s).unwrap()
+    };
+
+    let before = status(state.clone()).await;
+    assert_eq!(before["gestures"], gestures, "local gestures follow AGENTRIX_CAMERA, not the key");
+    if !state.voice.enabled {
+        assert_eq!(before["enabled"], false);
+        assert!(before["reason"].as_str().unwrap().contains("GOOGLE_API_KEY"));
+    }
+
+    // A key Gemini rejects (boot check or a live 1008 close) turns voice off with the reason;
+    // the camera button stays for local gestures.
+    state.voice.mark_unavailable("Voice is off — Gemini rejected the API key.");
+    let after = status(state.clone()).await;
+    assert_eq!(after["enabled"], false);
+    assert_eq!(after["camera"], false, "no Live camera channel without voice");
+    assert_eq!(after["gestures"], gestures);
+    if state.voice.enabled {
+        assert_eq!(after["reason"], "Voice is off — Gemini rejected the API key.");
+    }
+}
+
+#[tokio::test]
+async fn voice_state_session_belongs_to_the_signed_in_user() {
+    use spatial_os::routes::voice::resolve_ui_session;
+
+    let state = offline_app_state();
+    // Signed in without a session id: a new session for that user, not for a random one.
+    let sid = resolve_ui_session(&state, None, Some("user-a".into())).await;
+    assert_eq!(state.sessions.get(&sid).await.unwrap().user_id, "user-a");
+    // The page passes its own session: voice joins it.
+    assert_eq!(resolve_ui_session(&state, Some(&sid), Some("user-a".into())).await, sid);
+    // Someone else's session is never adopted.
+    let other = resolve_ui_session(&state, Some(&sid), Some("user-b".into())).await;
+    assert_ne!(other, sid);
+    assert_eq!(state.sessions.get(&other).await.unwrap().user_id, "user-b");
+    // Anonymous: an existing session is joined, an unknown id is replaced.
+    assert_eq!(resolve_ui_session(&state, Some(&sid), None).await, sid);
+    let fresh = resolve_ui_session(&state, Some("no-such-session"), None).await;
+    assert_ne!(fresh, "no-such-session");
+    assert!(state.sessions.get(&fresh).await.is_some());
 }
 
 #[tokio::test]

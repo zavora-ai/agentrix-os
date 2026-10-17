@@ -39,27 +39,7 @@ fn fallback_resolve(id: &str, record: Option<&crate::ambient::AmbientAgentRecord
             "actions": ["Open"]
         });
     }
-    match id {
-        "research" => serde_json::json!({
-            "big": "Brief ready",
-            "sub": "ABC Corp · funding, team, risks",
-            "actions": ["Open", "Save"]
-        }),
-        "scout" => serde_json::json!({
-            "big": "Price dropped",
-            "sub": "That listing fell 12% overnight",
-            "actions": ["Buy now", "Keep watching"]
-        }),
-        "maker" => serde_json::json!({
-            "lines": [
-                "<b>•</b> Drafted a weekend playlist",
-                "<b>•</b> Sketched 3 logo ideas",
-                "<b>•</b> Wrote a trip shortlist"
-            ],
-            "actions": ["Show me", "Discard"]
-        }),
-        _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
-    }
+    crate::orchestrator::fallback::unavailable(format!("No {id} result yet"))
 }
 
 pub fn stream_proactive(

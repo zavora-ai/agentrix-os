@@ -64,6 +64,7 @@ cargo test --test validate -- gemini_ router_agent suzy_agent greeting_agent_bui
 cargo test --test validate deck_workflow_writes_three_artifacts -- --ignored              # full E2E, slow
 cargo clippy --all-targets
 node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/static/gesture-classifier.js); in CI
+node scripts/test-live-voice.mjs                  # mic/camera/Live failure paths (web/static/live-voice.js); in CI
 ```
 
 - **libtest filters are substrings, not regexes.** Pass several names after `--`; a single

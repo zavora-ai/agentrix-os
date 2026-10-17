@@ -1,8 +1,10 @@
 /**
  * Local hand-gesture detection for the camera channel (M10-T5).
  *
- * Gemini Live still receives the frames, but a model only acts at turn boundaries, so a silent
- * user waving at the camera got no reaction. This runs MediaPipe's hand landmarker + gesture
+ * Gemini Live receives the frames while a session is open, but a model only acts at turn
+ * boundaries, so a silent user waving at the camera got no reaction. This runs on the camera
+ * stream whether or not there is a Live session (no key, rejected key, session dropped): it
+ * starts and stops only with the camera itself. It runs MediaPipe's hand landmarker + gesture
  * recogniser in the browser on the same camera stream (about 10 fps, nothing leaves the
  * machine), feeds the per-frame facts to the pure classifier in gesture-classifier.js, and
  * emits the same `agentrix:gesture` event the model path emits — so gestures.js, the ding and
@@ -20,9 +22,13 @@
   let recognizer = null;
   let loading = null;
   let video = null;
+  let stream = null;
   let timer = null;
   let classifier = null;
   let handSeen = false;
+  // Bumped by every stop: a start still waiting for the model after a restart must not add a
+  // second interval (the first one used to leak and run forever).
+  let generation = 0;
 
   function emit(name, detail) {
     window.dispatchEvent(new CustomEvent(name, { detail }));
@@ -86,15 +92,18 @@
     if (gesture) emit('agentrix:gesture', { gesture, source: 'local' });
   }
 
-  async function start(stream) {
+  async function start(source) {
+    if (source === stream && video) return; // already running on this stream
     stop();
+    const gen = generation;
     const api = window.AgentrixGestureClassifier;
     if (!api) return;
+    stream = source;
     classifier = api.createGestureClassifier({ mirrored: false });
     video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
-    video.srcObject = stream;
+    video.srcObject = source;
     try {
       await video.play();
     } catch (_) {
@@ -106,11 +115,13 @@
       console.warn('[agentrix] local gesture detection unavailable:', err);
       return;
     }
-    if (!video) return; // camera stopped while loading
+    if (gen !== generation || !video) return; // stopped or restarted while loading
     timer = setInterval(tick, TICK_MS);
   }
 
   function stop() {
+    generation++;
+    stream = null;
     if (timer) {
       clearInterval(timer);
       timer = null;

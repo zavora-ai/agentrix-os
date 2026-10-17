@@ -444,7 +444,7 @@ All server → client events on `POST /api/sessions/{sid}/intent` (or GET SSE ch
 | Event `type` | Payload fields | UI handler |
 |--------------|----------------|------------|
 | `scenario` | `key` | set `currentKey` |
-| `card_spawn` | `id`, `glyph`, `title`, `agent`, `delay`, `attention?`, `surface?` | `buildCard` + animate |
+| `card_spawn` | `id`, `glyph`, `title`, `agent`, `delay`, `attention?`, `surface?`, `simulated?` | `buildCard` + animate |
 | `card_status` | `id`, `text` | update status line |
 | `card_surface` | `id`, `surface`, `delta` | `buildSurface` partial update |
 | `card_resolve` | `id`, `resolve`, `detail?` | `resolve()` |
@@ -455,6 +455,13 @@ All server → client events on `POST /api/sessions/{sid}/intent` (or GET SSE ch
 | `agent_done` | `id` | `agentDone()` |
 | `error` | `message`, `recoverable` | toast + log |
 | `done` | — | close stream |
+
+`simulated: true` on a card and on its `resolve` marks a scripted sample streamed in a live
+deployment because that scenario's runner is not running; the card text reads "Simulated sample"
+and the summary says the cards are not the user's data. The no-key mock tour and `?demo=1` are
+labeled by the "Simulated agents" banner instead (NFR-008). `resolve.unavailable: true` marks a
+card whose agent failed or whose integration is not connected (`big` is "Unavailable" or
+"Not connected"); no default values are shown in its place.
 
 ### 7.6 REST API (complete)
 

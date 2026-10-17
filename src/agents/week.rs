@@ -91,11 +91,10 @@ fn summarize_health_csv(csv: &str) -> String {
             }
         }
     }
-    let avg = if sleep_hours.is_empty() {
-        6.1
-    } else {
-        sleep_hours.iter().sum::<f64>() / sleep_hours.len() as f64
-    };
+    if sleep_hours.is_empty() {
+        return format!("No sleep rows in health.csv · steps {steps}");
+    }
+    let avg = sleep_hours.iter().sum::<f64>() / sleep_hours.len() as f64;
     let mut out = format!("avg sleep {avg:.1}h · steps {steps} · imported from health.csv");
     if let Some(e) = health_escalation(avg, sleep_hours.len()) {
         out.push_str(" · ");
@@ -122,11 +121,7 @@ async fn money_agent(
             )
             .toolset(tools)
             .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.2),
-                max_output_tokens: Some(4096),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.2, 4096))
             .build()?;
         return Ok(Arc::new(agent));
     }
@@ -156,11 +151,7 @@ async fn focus_agent(
             )
             .toolset(tools)
             .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.25),
-                max_output_tokens: Some(4096),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.25, 4096))
             .build()?;
         return Ok(Arc::new(agent));
     }
