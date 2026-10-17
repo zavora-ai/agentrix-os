@@ -1498,7 +1498,7 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-actions".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let a = state.pending.create(&rec.user_id, Some(&rec.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
     let b = state.pending.create(&rec.user_id, Some(&rec.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
     let c = state.pending.create(&rec.user_id, Some(&rec.session_id), "calendar_agent", Domain::Work, "create_event", Effect::ScheduleWithOthers, serde_json::json!({}), None).await;
@@ -1551,7 +1551,7 @@ async fn permission_routes_set_mode_and_pause() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-perms".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route("/api/permissions", axum::routing::get(spatial_os::routes::permissions::get).put(spatial_os::routes::permissions::put))
         .route("/api/pause", axum::routing::post(spatial_os::routes::permissions::pause))
@@ -1634,7 +1634,7 @@ async fn commit_creates_an_approved_action_with_audit() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-commit".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     state.sessions.set_scenario(&rec.session_id, "morning", Some("Start my day")).await;
     state.sessions.upsert_card(&rec.session_id, 1, serde_json::json!({"title":"Needs you","agent":"inbox.agent"}), "resolved", None, false).await;
     let app = axum::Router::new()
@@ -1684,6 +1684,11 @@ fn known_app_state() -> (spatial_os::state::AppState, axum::http::HeaderMap) {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
     (state, headers)
+}
+
+/// The JWT subject behind `known_app_state`'s headers — the only user its routes act as.
+fn known_user(state: &spatial_os::state::AppState, headers: &axum::http::HeaderMap) -> String {
+    state.awp.user_id(headers).expect("known headers carry a valid JWT").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1794,7 +1799,7 @@ async fn memory_routes_remember_confirm_export_purge() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-memory-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route("/api/memory", axum::routing::get(spatial_os::routes::memory::list).post(spatial_os::routes::memory::remember).delete(spatial_os::routes::memory::purge))
         .route("/api/memory/export", axum::routing::get(spatial_os::routes::memory::export))
@@ -1949,7 +1954,7 @@ async fn consent_routes_get_and_put_require_known_trust() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-consent-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route(
             "/api/consents",
@@ -2219,7 +2224,7 @@ async fn tasks_route_lists_open_tasks_for_known_user() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-tasks-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let work = state
         .tasks
         .create(
@@ -2901,4 +2906,76 @@ fn security_dev_login_only_on_loopback() {
     config.host = "127.0.0.1".into();
     config.base_url = "https://os.zavora.example".into();
     assert!(!config.dev_login_enabled(), "refused behind a public URL (reverse proxy)");
+}
+
+/// Review 2026-10-17: a bogus `zo_session` cookie plus the attacker's own valid Bearer token used
+/// to earn Known trust while identity fell back to the owner of the caller-supplied `session_id`.
+#[tokio::test]
+async fn security_known_routes_act_as_the_jwt_user_never_the_session_owner() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::Effect;
+    use tower::ServiceExt;
+
+    let (state, attacker) = known_app_state();
+    let mut attacker = attacker;
+    attacker.insert("cookie", "zo_session=not-a-jwt".parse().unwrap());
+    let attacker_id = known_user(&state, &attacker);
+
+    // The cookie is checked first, then Bearer: both the gate and the routes see the attacker.
+    let victim_token = spatial_os::auth::create_token(uuid::Uuid::new_v4(), "test-secret").unwrap();
+    let victim = state.sessions.create_for_user(spatial_os::auth::verify_token(&victim_token, "test-secret").unwrap().to_string()).await;
+    let pending = state.pending.create(&victim.user_id, Some(&victim.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
+
+    let app = axum::Router::new()
+        .route("/api/actions", axum::routing::get(spatial_os::routes::actions::list))
+        .route("/api/actions/{id}/approve", axum::routing::post(spatial_os::routes::actions::approve))
+        .route("/api/memory", axum::routing::get(spatial_os::routes::memory::list))
+        .route("/api/sessions/{session_id}/cards", axum::routing::get(spatial_os::routes::cards::list_cards))
+        .route("/api/sessions/{session_id}/commit", axum::routing::post(spatial_os::routes::commit::commit_action))
+        .with_state(state.clone());
+    let send = |req: Request<Body>| {
+        let app = app.clone();
+        let mut req = req;
+        req.headers_mut().extend(attacker.clone());
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+
+    let sid = &victim.session_id;
+    assert_eq!(send(Request::get(format!("/api/actions?session_id={sid}")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    assert_eq!(send(Request::get(format!("/api/memory?session_id={sid}")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    assert_eq!(send(Request::get(format!("/api/sessions/{sid}/cards")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    let commit = Request::post(format!("/api/sessions/{sid}/commit"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"card_title":"x","action_label":"Send"}"#))
+        .unwrap();
+    assert_eq!(send(commit).await, StatusCode::FORBIDDEN);
+    let approve = Request::post(format!("/api/actions/{}/approve", pending.id))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::json!({ "session_id": sid }).to_string()))
+        .unwrap();
+    assert_eq!(send(approve).await, StatusCode::FORBIDDEN);
+    assert_eq!(state.pending.get(pending.id).await.unwrap().status, spatial_os::permissions::PendingStatus::Pending);
+
+    // Without a session id the attacker only ever sees their own (empty) queue.
+    let res = app
+        .clone()
+        .oneshot({
+            let mut req = Request::get("/api/actions").body(Body::empty()).unwrap();
+            req.headers_mut().extend(attacker.clone());
+            req
+        })
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["user_id"], attacker_id.as_str());
+    assert!(json["actions"].as_array().unwrap().is_empty());
+
+    // A valid cookie wins over a Bearer token for someone else, in trust and identity alike.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("cookie", format!("zo_session={victim_token}").parse().unwrap());
+    headers.insert("authorization", attacker.get("authorization").unwrap().clone());
+    assert_eq!(state.awp.user_id(&headers).unwrap().to_string(), victim.user_id);
 }

@@ -18,6 +18,7 @@ pub struct AwpGate {
     pub rate_limiter: Arc<dyn RateLimiter>,
     pub trust_assigner: Arc<dyn TrustLevelAssigner>,
     pub business_context: Arc<ArcSwap<BusinessContext>>,
+    jwt_secret: Option<String>,
 }
 
 impl AwpGate {
@@ -49,7 +50,7 @@ impl AwpGate {
         );
 
         let trust_assigner: Arc<dyn TrustLevelAssigner> = Arc::new(JwtTrustAssigner {
-            jwt_secret,
+            jwt_secret: jwt_secret.clone(),
             fallback: DefaultTrustAssigner,
         });
 
@@ -57,7 +58,13 @@ impl AwpGate {
             rate_limiter: Arc::new(InMemoryRateLimiter::with_config(limits)),
             trust_assigner,
             business_context,
+            jwt_secret,
         }
+    }
+
+    /// The JWT user behind Known trust (`auth::extract_user_id` with this gate's secret).
+    pub fn user_id(&self, headers: &HeaderMap) -> Option<uuid::Uuid> {
+        auth::extract_user_id(headers, self.jwt_secret.as_deref()?)
     }
 
     pub async fn check(
@@ -98,18 +105,10 @@ pub struct JwtTrustAssigner {
 #[async_trait]
 impl TrustLevelAssigner for JwtTrustAssigner {
     async fn assign(&self, headers: &HeaderMap) -> TrustLevel {
-        if let Some(secret) = &self.jwt_secret {
-            if auth::extract_user_id(headers, secret).is_some() {
-                return TrustLevel::Known;
-            }
-            if let Some(token) = headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                && auth::verify_token(token, secret).is_some()
-            {
-                return TrustLevel::Known;
-            }
+        if let Some(secret) = &self.jwt_secret
+            && auth::extract_user_id(headers, secret).is_some()
+        {
+            return TrustLevel::Known;
         }
         self.fallback.assign(headers).await
     }

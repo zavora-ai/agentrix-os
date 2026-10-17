@@ -90,16 +90,21 @@ pub async fn me(State(state): State<Arc<AuthState>>, headers: HeaderMap) -> impl
     }
 }
 
+/// The signed-in user: the subject of a valid JWT from the session cookie, else from an
+/// `Authorization: Bearer` header. This is the only identity function — `JwtTrustAssigner` grants
+/// Known from it and the routes act as the user it returns, so trust and identity cannot disagree
+/// (an invalid cookie no longer hides a valid Bearer token, or vice versa).
 pub fn extract_user_id(headers: &HeaderMap, secret: &str) -> Option<uuid::Uuid> {
-    let token = extract_cookie_token(headers).or_else(|| {
-        headers
-            .get("authorization")?
-            .to_str()
-            .ok()?
-            .strip_prefix("Bearer ")
-            .map(|s| s.to_string())
-    })?;
-    verify_token(&token, secret)
+    extract_cookie_token(headers)
+        .and_then(|t| verify_token(&t, secret))
+        .or_else(|| {
+            let bearer = headers
+                .get("authorization")?
+                .to_str()
+                .ok()?
+                .strip_prefix("Bearer ")?;
+            verify_token(bearer, secret)
+        })
 }
 
 fn extract_cookie_token(headers: &HeaderMap) -> Option<String> {

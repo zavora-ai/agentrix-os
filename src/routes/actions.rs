@@ -1,6 +1,7 @@
 //! Pending actions API (S2-T7): list, approve, reject, edit, batch approve.
 //!
-//! Identity: the JWT user when present, otherwise the owner of `session_id` (query or body).
+//! Identity: the JWT user (`AwpGate::user_id`), never the owner of a caller-supplied
+//! `session_id`; a `session_id` that is given must belong to that user.
 
 use axum::{
     extract::{Path, Query, State},
@@ -11,25 +12,39 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth;
 use crate::intelligence::ledger::ActivityEvent;
 use crate::permissions::{execute_approved, AuditEntry, PendingAction, PendingStatus};
-use crate::state::AppState;
+use crate::state::{AppState, SessionRecord};
 
-/// Resolve the acting user from JWT or a session id.
+/// The acting user on a `known` route: the subject of the JWT that earned Known trust. A
+/// `session_id`, when given, must be one of that user's sessions.
 pub async fn resolve_user(state: &AppState, headers: &HeaderMap, session_id: Option<&str>) -> Result<String, Response> {
-    if let Some(auth_state) = &state.auth
-        && let Some(uid) = auth::extract_user_id(headers, &auth_state.jwt_secret)
-    {
-        return Ok(uid.to_string());
-    }
+    let Some(uid) = state.awp.user_id(headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "sign in required").into_response());
+    };
+    let user = uid.to_string();
     if let Some(sid) = session_id {
-        if let Some(rec) = state.sessions.get(sid).await {
-            return Ok(rec.user_id);
-        }
-        return Err((StatusCode::NOT_FOUND, "session not found").into_response());
+        owned_record(state, &user, sid).await?;
     }
-    Err((StatusCode::BAD_REQUEST, "session_id required (or sign in)").into_response())
+    Ok(user)
+}
+
+/// The session behind a session-scoped `known` route, if the JWT user owns it.
+pub async fn owned_session(state: &AppState, headers: &HeaderMap, session_id: &str) -> Result<SessionRecord, Response> {
+    let Some(uid) = state.awp.user_id(headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "sign in required").into_response());
+    };
+    owned_record(state, &uid.to_string(), session_id).await
+}
+
+async fn owned_record(state: &AppState, user: &str, session_id: &str) -> Result<SessionRecord, Response> {
+    let Some(record) = state.sessions.get(session_id).await else {
+        return Err((StatusCode::NOT_FOUND, "session not found").into_response());
+    };
+    if record.user_id != user {
+        return Err((StatusCode::FORBIDDEN, "not your session").into_response());
+    }
+    Ok(record)
 }
 
 #[derive(Deserialize, Default)]

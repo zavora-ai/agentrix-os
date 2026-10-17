@@ -3,7 +3,6 @@ use serde::Serialize;
 
 use adk_session::CreateRequest;
 
-use crate::auth;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -17,10 +16,7 @@ pub async fn create_session(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Json<SessionResponse> {
-    let authenticated_user = state
-        .auth
-        .as_ref()
-        .and_then(|a| auth::extract_user_id(&headers, &a.jwt_secret));
+    let authenticated_user = state.awp.user_id(&headers);
     let user_id = authenticated_user
         .map(|u| u.to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
