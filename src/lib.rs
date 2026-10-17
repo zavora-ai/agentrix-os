@@ -15,6 +15,7 @@ pub mod config;
 pub mod db;
 pub mod pg_session;
 pub mod greeting;
+pub mod html;
 pub mod events;
 pub mod orchestrator;
 pub mod rails;

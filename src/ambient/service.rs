@@ -98,7 +98,7 @@ async fn on_agent_done(
         "research" => research_resolve(text),
         "scout" => scout_resolve(text),
         "maker" => maker_resolve(text),
-        _ => serde_json::json!({ "big": "Done", "sub": text, "actions": ["Open"] }),
+        _ => serde_json::json!({ "big": "Done", "sub": crate::html::escape(text), "actions": ["Open"] }),
     };
 
     let summary = text.chars().take(200).collect::<String>();

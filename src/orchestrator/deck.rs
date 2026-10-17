@@ -57,11 +57,14 @@ fn status_line(tool: &str) -> &'static str {
 
 /// Card label for a saved artifact: what kind of file it is and its name. The slide count is the
 /// number of `add_slide` calls seen in this run; nothing about the content is estimated (rule 1).
+/// The file name is the tool's choice, so it is escaped for the card HTML.
 fn artifact_label(path: &Path, slides_added: u32) -> (String, String) {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("artifact");
+        .map(crate::html::escape)
+        .unwrap_or_else(|| "artifact".into());
+    let name = name.as_str();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
         "xlsx" => ("Workbook saved".into(), name.into()),
