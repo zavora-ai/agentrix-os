@@ -2,7 +2,7 @@ use adk_core::{
     identity::{AdkIdentity, AppName, SessionId, UserId},
     Event,
 };
-use adk_session::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
+use adk_session::{AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -17,6 +17,34 @@ impl PgSessionService {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// Append to the session addressed by its full `(app_name, user_id, id)` key. One session id
+    /// exists under several app names (`agents::ensure_runner_session` reuses the UI session id
+    /// for every runner), so the id alone does not say whose history an event belongs to.
+    async fn append(&self, app_name: &str, user_id: &str, session_id: &str, event: &Event) -> adk_core::Result<()> {
+        let event_json = serde_json::to_value(event).map_err(pg_err)?;
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
+        let touched = sqlx::query("UPDATE agent_sessions SET updated_at = NOW() WHERE app_name = $1 AND user_id = $2 AND id = $3")
+            .bind(app_name).bind(user_id).bind(session_id)
+            .execute(&mut *tx).await
+            .map_err(pg_err)?;
+        if touched.rows_affected() == 0 {
+            return Err(adk_core::AdkError::not_found(
+                adk_core::ErrorComponent::Session,
+                "pg_session.not_found",
+                format!("session {app_name}/{session_id} not found"),
+            ));
+        }
+        sqlx::query("INSERT INTO agent_events (session_app_name, session_user_id, session_id, event_data) VALUES ($1, $2, $3, $4)")
+            .bind(app_name).bind(user_id).bind(session_id).bind(&event_json)
+            .execute(&mut *tx).await
+            .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)
+    }
+}
+
+fn pg_err(e: impl std::fmt::Display) -> adk_core::AdkError {
+    adk_core::AdkError::internal(adk_core::ErrorComponent::Session, "pg_session.error", e.to_string())
 }
 
 #[async_trait]
@@ -128,47 +156,32 @@ impl SessionService for PgSessionService {
         Ok(())
     }
 
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_core::Result<()> {
+        let id = &req.identity;
+        self.append(id.app_name.as_ref(), id.user_id.as_ref(), id.session_id.as_ref(), &req.event).await
+    }
+
+    /// Legacy id-only addressing. Appends only when exactly one session has this id; an id
+    /// shared across app names is refused rather than written into an arbitrary app's history.
     async fn append_event(&self, session_id: &str, event: Event) -> adk_core::Result<()> {
-        let event_json = serde_json::to_value(&event).map_err(|e| {
-            adk_core::AdkError::internal(
-                adk_core::ErrorComponent::Session,
-                "pg_session.error",
-                e.to_string(),
-            )
-        })?;
-
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT app_name, user_id FROM agent_sessions WHERE id = $1 LIMIT 1")
-                .bind(session_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    adk_core::AdkError::internal(
-                        adk_core::ErrorComponent::Session,
-                        "pg_session.error",
-                        e.to_string(),
-                    )
-                })?;
-
-        let (app_name, user_id) = row.ok_or_else(|| {
-            adk_core::AdkError::not_found(
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT app_name, user_id FROM agent_sessions WHERE id = $1 LIMIT 2")
+            .bind(session_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(pg_err)?;
+        match rows.as_slice() {
+            [(app_name, user_id)] => self.append(app_name, user_id, session_id, &event).await,
+            [] => Err(adk_core::AdkError::not_found(
                 adk_core::ErrorComponent::Session,
                 "pg_session.not_found",
                 format!("session {session_id} not found"),
-            )
-        })?;
-
-        sqlx::query("INSERT INTO agent_events (session_app_name, session_user_id, session_id, event_data) VALUES ($1, $2, $3, $4)")
-            .bind(&app_name).bind(&user_id).bind(session_id).bind(&event_json)
-            .execute(&self.pool).await
-            .map_err(|e| adk_core::AdkError::internal(adk_core::ErrorComponent::Session, "pg_session.error", e.to_string()))?;
-
-        sqlx::query("UPDATE agent_sessions SET updated_at = NOW() WHERE app_name = $1 AND user_id = $2 AND id = $3")
-            .bind(&app_name).bind(&user_id).bind(session_id)
-            .execute(&self.pool).await
-            .map_err(|e| adk_core::AdkError::internal(adk_core::ErrorComponent::Session, "pg_session.error", e.to_string()))?;
-
-        Ok(())
+            )),
+            _ => Err(adk_core::AdkError::internal(
+                adk_core::ErrorComponent::Session,
+                "pg_session.ambiguous",
+                format!("session id {session_id} exists under several apps; append with its full identity"),
+            )),
+        }
     }
 }
 

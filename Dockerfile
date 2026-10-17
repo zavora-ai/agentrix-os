@@ -19,9 +19,12 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 
+# curl only for the HEALTHCHECK below.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin agentrix
 
 WORKDIR /app
 
@@ -31,13 +34,25 @@ COPY --from=builder /build/spatial-os/migrations /app/migrations
 COPY --from=builder /build/spatial-os/business.toml /app/business.toml
 COPY --from=builder /build/spatial-os/mcp_allowlists.toml /app/mcp_allowlists.toml
 
+# The binary was built in /build/spatial-os and would otherwise look for its web assets and
+# TOML catalogs there (CARGO_MANIFEST_DIR). AGENTRIX_ROOT also anchors relative paths such as
+# the MCP_*_PATH defaults.
 ENV HOST=0.0.0.0 \
     PORT=9847 \
     RUST_LOG=info \
+    AGENTRIX_ROOT=/app \
+    WEB_DIR=/app/web \
+    BUSINESS_TOML=/app/business.toml \
+    MCP_ALLOWLISTS_TOML=/app/mcp_allowlists.toml \
     ARTIFACT_DIR=/app/artifacts
 
-RUN mkdir -p /app/artifacts
+RUN mkdir -p /app/artifacts && chown agentrix /app/artifacts
+
+USER agentrix
 
 EXPOSE 9847
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/health" > /dev/null || exit 1
 
 CMD ["spatial-os"]

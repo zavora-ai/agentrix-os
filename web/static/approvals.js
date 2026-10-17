@@ -76,6 +76,9 @@
     let items = [];
     let signedOut = false;
     let lastCount = 0;
+    // Ids with an approve or reject request in flight: their buttons stay disabled, even
+    // across re-renders, so a double-click cannot send the same decision twice.
+    const inFlight = new Set();
 
     const sid = () => window.__AGENTRIX_LIVE__?.getSessionId?.() || null;
     const qs = () => {
@@ -145,9 +148,11 @@
         list.innerHTML = '<div class="p2-empty">Nothing waiting for you — agents will queue actions here.</div>';
       }
       if (items.length > 1) allBtn.removeAttribute('hidden');
+      allBtn.disabled = inFlight.size > 0;
       items.forEach((a) => {
         const row = document.createElement('div');
         row.className = 'appr-row';
+        row.dataset.id = a.id;
         if (a.domain === 'work' || a.domain === 'home') row.classList.add('dom-' + a.domain);
         const meta = document.createElement('div');
         meta.className = 'appr-meta';
@@ -169,6 +174,7 @@
           b.className = 'btn ' + cls;
           b.textContent = label;
           b.setAttribute('aria-label', `${label}: ${a.summary || a.tool}`);
+          b.disabled = inFlight.has(a.id);
           b.addEventListener('click', fn);
           btns.appendChild(b);
           return b;
@@ -213,7 +219,18 @@
       }
     }
 
+    function busy(ids, on) {
+      ids.forEach((id) => (on ? inFlight.add(id) : inFlight.delete(id)));
+      allBtn.disabled = inFlight.size > 0;
+      list.querySelectorAll('.appr-row').forEach((row) => {
+        if (ids.includes(row.dataset.id)) row.querySelectorAll('button').forEach((b) => (b.disabled = on));
+      });
+    }
+
     async function act(a, verb, row) {
+      if (inFlight.has(a.id)) return;
+      busy([a.id], true);
+      let settled = false;
       try {
         const res = await fetch(`/api/actions/${a.id}/${verb}`, {
           method: 'POST',
@@ -221,26 +238,34 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: sid() }),
         });
-        if (!res.ok) {
+        if (res.status === 409) {
+          const current = await res.json().catch(() => ({}));
+          toast(`Already ${current.status || 'handled'} — ${a.summary}`);
+        } else if (!res.ok) {
           toast(`Could not ${verb} — ${res.status}`);
           return;
-        }
-        const updated = await res.json();
-        toast(
-          updated.status === 'approved'
-            ? `Approved — ${a.summary}`
-            : updated.status === 'failed'
-              ? `Failed — ${a.summary}`
-              : `Rejected — ${a.summary}`
-        );
-        if (row) {
-          row.classList.add('appr-out');
-          setBadge(Math.max(0, lastCount - 1));
-          setTimeout(load, 320);
-          return;
+        } else {
+          const updated = await res.json();
+          toast(
+            updated.status === 'approved'
+              ? `Approved — ${a.summary}`
+              : updated.status === 'failed'
+                ? `Failed — ${a.summary}`
+                : `Rejected — ${a.summary}`
+          );
+          if (row) {
+            settled = true; // the row fades out with its buttons still disabled
+            row.classList.add('appr-out');
+            setBadge(Math.max(0, lastCount - 1));
+            setTimeout(load, 320);
+            return;
+          }
         }
       } catch (err) {
         toast(`Could not ${verb} — ${err.message || 'try again'}`);
+      } finally {
+        if (settled) inFlight.delete(a.id);
+        else busy([a.id], false);
       }
       load();
     }
@@ -271,8 +296,9 @@
     }
 
     async function approveAll() {
-      const ids = items.map((a) => a.id);
+      const ids = items.map((a) => a.id).filter((id) => !inFlight.has(id));
       if (!ids.length) return;
+      busy(ids, true);
       try {
         const res = await fetch('/api/actions/approve', {
           method: 'POST',
@@ -288,6 +314,8 @@
         }
       } catch (err) {
         toast(`Batch approve failed — ${err.message || 'try again'}`);
+      } finally {
+        busy(ids, false);
       }
       load();
     }

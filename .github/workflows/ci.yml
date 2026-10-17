@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # adk-rust is a path dependency cloned next to this repo. Pin it so a push to adk-rust main
+  # cannot break this build; bump deliberately (and refresh Cargo.lock in the same commit).
+  ADK_RUST_REPO: https://github.com/zavora-ai/adk-rust.git
+  ADK_RUST_REF: 59b0cbae6453ffc347ff792af23ed1997ab37c60
 
 jobs:
   rust:
@@ -32,8 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone adk-rust (path dependency)
-        run: git clone --depth 1 https://github.com/zavora-ai/adk-rust.git ../adk-rust
+      - name: Clone adk-rust (path dependency, pinned)
+        run: |
+          git init -q ../adk-rust
+          git -C ../adk-rust fetch -q --depth 1 "$ADK_RUST_REPO" "$ADK_RUST_REF"
+          git -C ../adk-rust checkout -q FETCH_HEAD
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,16 +65,23 @@ jobs:
       - name: cargo test (offline validate)
         run: >
           cargo test --test validate --
-          awp_gate business_toml mock_deck combine_action keyword_router artifact_paths
-          session_store voice_state greeting_brand background_cards ambient_store tour_prompts
-          proactive_mock mcp_allowlist health_exposes
+          awp_gate awp_discovery awp_manifest business_toml mock_deck combine_action keyword_router
+          artifact_paths session_store session_persistence voice_state greeting_brand
+          background_cards ambient_store tour_prompts proactive_mock mcp_allowlist health_exposes
+          people_rail_unavailable commit_creates
           postgres_schema ui_session_persists pg_agent_session
-          domain_ intake_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_
+          domain_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_
           consent_ tasks_ s7_ security_
+          work_agents work_stub_agents work_and_home_worlds home_agents bus_carries arbitration_
+
+      - name: web client tests (node)
+        run: |
+          node scripts/test-gesture-classifier.mjs
+          node scripts/test-live-voice.mjs
 
       - name: cargo test (live — optional secrets)
         if: env.GOOGLE_API_KEY != ''
-        run: cargo test --test validate -- gemini_ router_agent suzy_agent mother_agent_builds
+        run: cargo test --test validate -- gemini_ router_agent suzy_agent greeting_agent_builds
 
   docker:
     runs-on: ubuntu-latest
@@ -76,10 +90,28 @@ jobs:
         with:
           path: spatial-os
 
-      - name: Clone adk-rust
-        run: git clone --depth 1 https://github.com/zavora-ai/adk-rust.git adk-rust
+      - name: Clone adk-rust (pinned)
+        run: |
+          git init -q adk-rust
+          git -C adk-rust fetch -q --depth 1 "$ADK_RUST_REPO" "$ADK_RUST_REF"
+          git -C adk-rust checkout -q FETCH_HEAD
         working-directory: spatial-os/..
 
       - name: Docker build
         run: docker build -f spatial-os/Dockerfile -t agentrix-os:ci .
         working-directory: spatial-os/..
+
+      # Building is not enough: the image must boot with no secrets and serve its own web assets
+      # and catalogs from /app, not from the builder's source tree.
+      - name: Docker smoke test
+        run: |
+          docker run -d --name agentrix-ci -p 9847:9847 agentrix-os:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9847/health > /tmp/health.json && break
+            sleep 1
+          done
+          docker logs agentrix-ci
+          cat /tmp/health.json
+          curl -fsS -o /dev/null http://127.0.0.1:9847/
+          curl -fsS -o /dev/null http://127.0.0.1:9847/.well-known/awp.json
+          test "$(docker inspect -f '{{.Config.User}}' agentrix-os:ci)" = agentrix

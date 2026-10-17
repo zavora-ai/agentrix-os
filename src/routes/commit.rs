@@ -90,6 +90,7 @@ pub async fn commit_action(
         .pending
         .resolve(pending.id, PendingStatus::Approved, Some(serde_json::json!({"via": "commit"})))
         .await
+        .action()
         .unwrap_or(pending);
     let mode = state.permissions.mode_for(&record.user_id, &agent, None).await;
     state

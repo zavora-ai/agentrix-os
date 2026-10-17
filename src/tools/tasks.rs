@@ -415,9 +415,10 @@ impl TaskStore {
     }
 
     /// Group the open tasks visible in `scope` around `day` (UTC).
-    pub async fn plan_day(&self, user_id: &str, scope: Domain, day: NaiveDate) -> DayPlan {
+    /// Day plan over the open tasks `scope` can see, optionally narrowed to one `domain`.
+    pub async fn plan_day(&self, user_id: &str, scope: Domain, domain: Option<Domain>, day: NaiveDate) -> DayPlan {
         let open = self
-            .list(user_id, scope, &TaskFilter { status: Some(TaskStatus::Open), ..Default::default() })
+            .list(user_id, scope, &TaskFilter { domain, status: Some(TaskStatus::Open), ..Default::default() })
             .await;
         let start = start_of_day(day);
         let end = start + Duration::days(1);
@@ -731,14 +732,15 @@ pub fn plan_day_tool(agent_id: &str) -> Arc<dyn adk_core::Tool> {
                             Err(_) => return rejected(format!("could not parse date '{other}' — use YYYY-MM-DD, today or tomorrow")),
                         },
                     };
-                    let domain = match arg_str(&args, "domain").and_then(Domain::parse) {
-                        Some(d) if !visible(scope, d) => {
-                            return rejected(format!("the {d} world is outside this agent's scope ({scope})"))
-                        }
-                        Some(d) => d,
-                        None => scope,
-                    };
-                    let plan = store_handle().plan_day(ctx.user_id(), domain, day).await;
+                    // The domain argument only narrows: the scope stays the agent's world, so a
+                    // work agent asking for "shared" gets shared tasks, never the home world's.
+                    let domain = arg_str(&args, "domain").and_then(Domain::parse);
+                    if let Some(d) = domain
+                        && !visible(scope, d)
+                    {
+                        return rejected(format!("the {d} world is outside this agent's scope ({scope})"));
+                    }
+                    let plan = store_handle().plan_day(ctx.user_id(), scope, domain, day).await;
                     Ok(serde_json::json!({ "status": "ok", "plan": plan }))
                 }
             },
@@ -918,7 +920,7 @@ mod tests {
         store.complete("u", done.id, "test").await.unwrap();
         assert!(store.complete("u", done.id, "test").await.is_none(), "completing twice is refused");
 
-        let plan = store.plan_day("u", Domain::Shared, day).await;
+        let plan = store.plan_day("u", Domain::Shared, None, day).await;
         assert_eq!(plan.overdue.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["overdue"]);
         assert_eq!(plan.due_today.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["today"]);
         assert_eq!(plan.focus_sessions.len(), 1);
@@ -926,7 +928,14 @@ mod tests {
         assert_eq!(plan.postponed_debt.len(), 1);
         assert_eq!(plan.postponed_debt[0].postponed_count, 3);
         assert_eq!(plan.open_total, 6);
-        let work_only = store.plan_day("u", Domain::Work, day).await;
+        let work_only = store.plan_day("u", Domain::Work, None, day).await;
         assert!(work_only.postponed_debt.is_empty(), "home debt is invisible to a work scope");
+        // A domain only narrows the scope: asking a work scope for shared tasks never widens it.
+        store.create("u", new(Domain::Shared, "shared-today", Some(noon))).await;
+        let shared_from_work = store.plan_day("u", Domain::Work, Some(Domain::Shared), day).await;
+        assert_eq!(shared_from_work.open_total, 1);
+        assert_eq!(shared_from_work.due_today[0].title, "shared-today");
+        assert!(shared_from_work.postponed_debt.is_empty());
+        assert_eq!(store.plan_day("u", Domain::Work, Some(Domain::Home), day).await.open_total, 0);
     }
 }

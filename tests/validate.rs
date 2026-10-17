@@ -938,6 +938,55 @@ async fn pg_agent_session_roundtrip() {
     assert_eq!(loaded.app_name(), "agentrix-os-validate");
 }
 
+/// One session id lives under several app names (every runner reuses the UI session id), so an
+/// appended event must land in the session of the app that produced it, not whichever row an
+/// id-only lookup returns first.
+#[tokio::test]
+async fn pg_agent_session_events_stay_with_their_app() {
+    use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+    use adk_session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
+    use spatial_os::pg_session::PgSessionService;
+
+    let pool = common::postgres_pool().await;
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let svc = PgSessionService::new(pool);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let apps = ["agentrix-router-validate", "agentrix-suzy-validate", "agentrix-mother-validate"];
+    for app in apps {
+        svc.create(CreateRequest { app_name: app.into(), user_id: user_id.clone(), session_id: Some(session_id.clone()), state: Default::default() })
+            .await
+            .expect("create agent session");
+    }
+
+    // Append 1, 2 and 3 events to the three apps, in reverse creation order.
+    for (n, app) in apps.iter().enumerate().rev() {
+        for i in 0..=n {
+            let identity = AdkIdentity::new(
+                AppName::try_from(*app).unwrap(),
+                UserId::try_from(user_id.as_str()).unwrap(),
+                SessionId::try_from(session_id.as_str()).unwrap(),
+            );
+            svc.append_event_for_identity(AppendEventRequest { identity, event: adk_core::Event::new(format!("{app}-{i}")) })
+                .await
+                .expect("append event");
+        }
+    }
+
+    for (n, app) in apps.iter().enumerate() {
+        let loaded = svc
+            .get(GetRequest { app_name: (*app).into(), user_id: user_id.clone(), session_id: session_id.clone(), num_recent_events: None, after: None })
+            .await
+            .expect("get agent session");
+        let events = loaded.events().all();
+        assert_eq!(events.len(), n + 1, "{app} holds exactly its own events");
+        assert!(events.iter().all(|e| e.invocation_id.starts_with(app)), "{app} holds no other app's events");
+    }
+
+    // The id-only path cannot tell the apps apart and refuses rather than guessing.
+    assert!(svc.append_event(&session_id, adk_core::Event::new("ambiguous")).await.is_err());
+}
+
 #[tokio::test]
 async fn people_rail_unavailable_without_slack() {
     let rail = spatial_os::rails::people::fetch(None).await;
@@ -1522,7 +1571,7 @@ async fn gate_suggest_runs_local_writes_and_queues_external_sends() {
 
     // Approval executes the un-gated tool and audits it.
     let state = offline_app_state();
-    let resolved = spatial_os::routes::actions::approve_one(&state, &user, pending).await;
+    let resolved = spatial_os::routes::actions::approve_one(&state, &user, pending).await.expect("this approval claims the action");
     assert_eq!(resolved.status, PendingStatus::Approved);
     assert_eq!(resolved.result.as_ref().unwrap()["output"], "SENT");
     let approved = svc.audit.list(&user, 50).await.into_iter().filter(|e| e.decision == "approved" && e.approval_id == Some(id)).count();
@@ -1614,19 +1663,115 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     assert!(matches!(state.pending.get(a.id).await.unwrap().status, PendingStatus::Approved | PendingStatus::Failed));
     assert!(matches!(state.pending.get(b.id).await.unwrap().status, PendingStatus::Approved | PendingStatus::Failed));
 
-    let mut req = Request::post(format!("/api/actions/{}/reject", c.id))
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
-        .unwrap();
-    req.headers_mut().extend(headers.clone());
-    let res = app.oneshot(req).await.unwrap();
+    let reject_c = || {
+        let mut req = Request::post(format!("/api/actions/{}/reject", c.id))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
+            .unwrap();
+        req.headers_mut().extend(headers.clone());
+        req
+    };
+    let res = app.clone().oneshot(reject_c()).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(state.pending.get(c.id).await.unwrap().status, PendingStatus::Rejected);
-    assert!(state.audit.count(&rec.user_id, Some("rejected")).await >= 1);
+    let rejected = state.audit.count(&rec.user_id, Some("rejected")).await;
+    assert!(rejected >= 1);
+    // A second reject is a conflict and writes no second audit row.
+    let res = app.clone().oneshot(reject_c()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(state.audit.count(&rec.user_id, Some("rejected")).await, rejected);
+
+    // `status=all` lists every action (it used to be parsed as a status first and rejected).
+    let list = |status: &str| {
+        let mut req = Request::get(format!("/api/actions?status={status}&session_id={}", rec.session_id)).body(Body::empty()).unwrap();
+        req.headers_mut().extend(headers.clone());
+        req
+    };
+    let res = app.clone().oneshot(list("all")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["actions"].as_array().unwrap().len(), 3);
+    let res = app.clone().oneshot(list("rejected")).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(app.oneshot(list("bogus")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+/// Double-clicked approvals, and an approval racing a rejection, run the tool at most once:
+/// the action is claimed (pending → executing) atomically and only the claimant executes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_actions_approve_runs_once_under_races() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::{Effect, PendingStatus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = runs.clone();
+    let tool = adk_tool::FunctionTool::new("race_send", "send", move |_c, _a| {
+        let counter = counter.clone();
+        async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok(serde_json::json!({"output": "SENT"}))
+        }
+    });
+    spatial_os::permissions::gate::services().registry.register("race_agent", Arc::new(tool)).await;
+
+    let (state, headers) = known_app_state();
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
+    let app = axum::Router::new()
+        .route("/api/actions/{id}/approve", axum::routing::post(spatial_os::routes::actions::approve))
+        .route("/api/actions/{id}/reject", axum::routing::post(spatial_os::routes::actions::reject))
+        .with_state(state.clone());
+    let post = |id: uuid::Uuid, verb: &str| {
+        let mut req = Request::post(format!("/api/actions/{id}/{verb}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
+            .unwrap();
+        req.headers_mut().extend(headers.clone());
+        app.clone().oneshot(req)
+    };
+
+    // Two approves (a double-click) and a reject, all at once.
+    let a = state.pending.create(&rec.user_id, Some(&rec.session_id), "race_agent", Domain::Work, "race_send", Effect::SendExternal, serde_json::json!({}), None).await;
+    let (x, y, z) = tokio::join!(post(a.id, "approve"), post(a.id, "approve"), post(a.id, "reject"));
+    let codes = [x.unwrap().status(), y.unwrap().status(), z.unwrap().status()];
+    assert_eq!(codes.iter().filter(|c| **c == StatusCode::OK).count(), 1, "exactly one decision wins: {codes:?}");
+    assert_eq!(codes.iter().filter(|c| **c == StatusCode::CONFLICT).count(), 2, "the others conflict: {codes:?}");
+    let status = state.pending.get(a.id).await.unwrap().status;
+    let expected_runs = usize::from(status == PendingStatus::Approved);
+    assert!(matches!(status, PendingStatus::Approved | PendingStatus::Rejected), "{status:?}");
+    assert_eq!(runs.load(Ordering::SeqCst), expected_runs, "the tool ran once only if an approval won");
+
+    // Many concurrent approvals of one action through `approve_one`: one execution.
+    let before = runs.load(Ordering::SeqCst);
+    let b = state.pending.create(&rec.user_id, Some(&rec.session_id), "race_agent", Domain::Work, "race_send", Effect::SendExternal, serde_json::json!({}), None).await;
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let (state, user, b) = (state.clone(), rec.user_id.clone(), b.clone());
+            tokio::spawn(async move { spatial_os::routes::actions::approve_one(&state, &user, b).await })
+        })
+        .collect();
+    let mut won = 0;
+    for h in handles {
+        if h.await.unwrap().is_ok() {
+            won += 1;
+        }
+    }
+    assert_eq!(won, 1);
+    assert_eq!(runs.load(Ordering::SeqCst), before + 1);
+    assert_eq!(state.pending.get(b.id).await.unwrap().status, PendingStatus::Approved);
+    let approvals = state.audit.list(&rec.user_id, 50).await.into_iter().filter(|e| e.approval_id == Some(b.id)).count();
+    assert_eq!(approvals, 1, "one audit row per executed approval");
 }
 
 #[tokio::test]
 async fn permission_routes_set_mode_and_pause() {
+    // Pause is process-wide: serialize with the gate tests that assert on it.
+    let _serial = gate_lock().lock().await;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use spatial_os::domain::Domain;
@@ -2115,13 +2260,15 @@ async fn consent_routes_get_and_put_require_known_trust() {
     assert!(read(res).await["consents"][0]["revoked_at"].is_string());
 }
 
-/// Needs `DATABASE_URL` (CI service container or `docker compose up -d`).
+/// Uses `DATABASE_URL` when it answers (CI service container or `docker compose up -d`).
 #[tokio::test]
 async fn consent_pg_roundtrip_persists_grant_and_revocation() {
     use spatial_os::domain::Domain;
     use spatial_os::memory::consent::ConsentStore;
 
-    let pool = common::postgres_pool().await;
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
     let user = format!("u-consent-pg-{}", uuid::Uuid::new_v4());
 
@@ -2279,6 +2426,39 @@ async fn tasks_tools_pass_through_the_permission_gate() {
     assert!(denied_count >= 1);
 }
 
+/// `plan_day` with `domain: "shared"` from a world agent narrows to shared tasks; it used to
+/// replace the agent's scope with `shared`, which sees every world.
+#[tokio::test]
+async fn tasks_plan_day_keeps_world_agents_in_their_world() {
+    use spatial_os::domain::Domain;
+    use spatial_os::tools::tasks::{store_handle, NewTask, Priority, TaskKind, TasksTools};
+
+    let user = adk_tool::SimpleToolContext::new("x").user_id().to_string();
+    let marker = uuid::Uuid::new_v4().to_string();
+    for (domain, title) in [(Domain::Home, format!("home-{marker}")), (Domain::Shared, format!("shared-{marker}"))] {
+        store_handle()
+            .create(&user, NewTask { domain, title: &title, kind: TaskKind::Task, due: Some(chrono::Utc::now()), duration_minutes: None, priority: Priority::Normal, source_agent: "test", notes: None })
+            .await;
+    }
+
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(adk_tool::SimpleToolContext::new("test"));
+    let plan_of = |agent: &'static str| {
+        let ctx = ctx.clone();
+        async move {
+            let tools = TasksTools::for_agent(agent).tools(ctx).await.unwrap();
+            let plan_day = tools.into_iter().find(|t| t.name() == "plan_day").unwrap();
+            let out = plan_day.execute(tool_ctx("s-plan"), serde_json::json!({"domain": "shared"})).await.unwrap();
+            assert_eq!(out["status"], "ok", "{out}");
+            serde_json::to_string(&out["plan"]).unwrap()
+        }
+    };
+    assert_eq!(spatial_os::tools::allowlist::catalog().world_for("calendar_agent"), Domain::Work);
+    let work = plan_of("calendar_agent").await;
+    assert!(work.contains(&format!("shared-{marker}")), "shared tasks are in a work agent's plan");
+    assert!(!work.contains(&format!("home-{marker}")), "home tasks never reach a work agent: {work}");
+    assert!(!work.contains("\"domain\":\"home\""), "no home task at all reaches a work agent");
+}
+
 #[tokio::test]
 async fn tasks_toolset_is_attached_only_to_agents_that_allowlist_it() {
     let inner: Arc<dyn adk_core::Toolset> = Arc::new(FakeInboxTools);
@@ -2387,13 +2567,15 @@ fn tasks_and_consents_capabilities_require_known_trust() {
     }
 }
 
-/// Needs `DATABASE_URL` (CI service container or `docker compose up -d`).
+/// Uses `DATABASE_URL` when it answers (CI service container or `docker compose up -d`).
 #[tokio::test]
 async fn tasks_pg_roundtrip_and_sprint_a_migrations() {
     use spatial_os::domain::Domain;
     use spatial_os::tools::tasks::{NewTask, Priority, TaskKind, TaskStore};
 
-    let pool = common::postgres_pool().await;
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
 
     let tables: Vec<(String,)> =
@@ -2530,11 +2712,9 @@ async fn s7_store_roundtrip_daily_baselines_observation() {
     use spatial_os::intelligence::baseline::{evaluate, Config};
     use spatial_os::intelligence::patterns::aggregate;
     use spatial_os::intelligence::store;
-    common::load_env();
-    if std::env::var("DATABASE_URL").is_err() {
+    let Some(pool) = common::try_postgres_pool().await else {
         return;
-    }
-    let pool = common::postgres_pool().await;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
     let user = format!("s7-test-{}", uuid::Uuid::new_v4());
     let mut daily = aggregate(&s7_fixture());

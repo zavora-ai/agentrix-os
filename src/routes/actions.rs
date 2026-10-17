@@ -13,7 +13,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::intelligence::ledger::ActivityEvent;
-use crate::permissions::{execute_approved, AuditEntry, PendingAction, PendingStatus};
+use crate::permissions::{execute_approved, AuditEntry, PendingAction, PendingStatus, Transition};
 use crate::state::{AppState, SessionRecord};
 
 /// The acting user on a `known` route: the subject of the JWT that earned Known trust. A
@@ -61,9 +61,12 @@ pub async fn list(
     let key = format!("actions:{}", q.session_id.clone().unwrap_or_default());
     state.awp.check(&headers, &key, "list_actions").await?;
     let user = resolve_user(&state, &headers, q.session_id.as_deref()).await?;
-    let status = q.status.as_deref().map(|s| PendingStatus::parse(s).ok_or_else(|| (StatusCode::BAD_REQUEST, "bad status").into_response())).transpose()?;
-    let status = status.or(Some(PendingStatus::Pending));
-    let actions = state.pending.list(&user, if q.status.as_deref() == Some("all") { None } else { status }, None).await;
+    let status = match q.status.as_deref() {
+        None => Some(PendingStatus::Pending),
+        Some("all") => None,
+        Some(s) => Some(PendingStatus::parse(s).ok_or_else(|| (StatusCode::BAD_REQUEST, "bad status").into_response())?),
+    };
+    let actions = state.pending.list(&user, status, None).await;
     Ok(Json(serde_json::json!({ "user_id": user, "actions": actions })))
 }
 
@@ -87,17 +90,22 @@ async fn owned(state: &AppState, headers: &HeaderMap, id: Uuid, session_id: Opti
     Ok((user, action))
 }
 
-/// Approve one pending action: execute with the un-gated tool, audit, ledger.
-pub async fn approve_one(state: &AppState, user: &str, action: PendingAction) -> PendingAction {
-    if action.status != PendingStatus::Pending {
-        return action;
-    }
+/// Approve one pending action: claim it, execute with the un-gated tool, audit, ledger.
+///
+/// Only the request that claims the action (Pending → Executing) runs it. `Err` carries the
+/// action as it stands when another approval or a rejection got there first, or it expired.
+pub async fn approve_one(state: &AppState, user: &str, action: PendingAction) -> Result<PendingAction, PendingAction> {
+    let action = match state.pending.claim(action.id).await {
+        Transition::Applied(claimed) => claimed,
+        Transition::Conflict(current) => return Err(current),
+        Transition::NotFound => return Err(action),
+    };
     let outcome = execute_approved(&action).await;
     let (status, result, decision) = match outcome {
         Ok(v) => (PendingStatus::Approved, Some(v), "approved"),
         Err(e) => (PendingStatus::Failed, Some(serde_json::json!({"error": e})), "failed"),
     };
-    let resolved = state.pending.resolve(action.id, status, result).await.unwrap_or(action.clone());
+    let resolved = state.pending.complete(action.id, status, result).await.unwrap_or(action.clone());
     let mode = state.permissions.mode_for(user, &action.agent_id, Some(&action.tool)).await;
     state
         .audit
@@ -112,7 +120,12 @@ pub async fn approve_one(state: &AppState, user: &str, action: PendingAction) ->
             .effect(action.effect)
             .meta(serde_json::json!({"decision": decision, "tool_class": action.effect.as_str()})),
     );
-    resolved
+    Ok(resolved)
+}
+
+/// 409 with the action as it stands: someone else claimed or resolved it, or it expired.
+fn conflict(action: PendingAction) -> Response {
+    (StatusCode::CONFLICT, Json(action)).into_response()
 }
 
 pub async fn approve(
@@ -124,7 +137,7 @@ pub async fn approve(
     let body = body.map(|b| b.0).unwrap_or_default();
     state.awp.check(&headers, &format!("approve:{id}"), "approve_action").await?;
     let (user, action) = owned(&state, &headers, id, body.session_id.as_deref()).await?;
-    Ok(Json(approve_one(&state, &user, action).await))
+    approve_one(&state, &user, action).await.map(Json).map_err(conflict)
 }
 
 pub async fn approve_batch(
@@ -135,14 +148,18 @@ pub async fn approve_batch(
     state.awp.check(&headers, "approve:batch", "approve_action").await?;
     let user = resolve_user(&state, &headers, body.session_id.as_deref()).await?;
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     for id in body.ids.unwrap_or_default() {
         if let Some(action) = state.pending.get(id).await
             && action.user_id == user
         {
-            out.push(approve_one(&state, &user, action).await);
+            match approve_one(&state, &user, action).await {
+                Ok(done) => out.push(done),
+                Err(current) => skipped.push(current),
+            }
         }
     }
-    Ok(Json(serde_json::json!({ "approved": out })))
+    Ok(Json(serde_json::json!({ "approved": out, "skipped": skipped })))
 }
 
 pub async fn reject(
@@ -154,7 +171,11 @@ pub async fn reject(
     let body = body.map(|b| b.0).unwrap_or_default();
     state.awp.check(&headers, &format!("reject:{id}"), "approve_action").await?;
     let (user, action) = owned(&state, &headers, id, body.session_id.as_deref()).await?;
-    let resolved = state.pending.resolve(id, PendingStatus::Rejected, None).await.unwrap_or(action.clone());
+    let resolved = match state.pending.resolve(id, PendingStatus::Rejected, None).await {
+        Transition::Applied(resolved) => resolved,
+        Transition::Conflict(current) => return Err(conflict(current)),
+        Transition::NotFound => return Err((StatusCode::NOT_FOUND, "action not found").into_response()),
+    };
     let mode = state.permissions.mode_for(&user, &action.agent_id, Some(&action.tool)).await;
     state
         .audit
