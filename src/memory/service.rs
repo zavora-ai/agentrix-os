@@ -417,8 +417,18 @@ impl MemoryService {
 
 // ---- Postgres ----
 
+/// The `value` and `provenance` columns as stored. A sensitive item's value is encrypted and
+/// its provenance keeps no free-text notes, which would otherwise sit in plain JSONB.
+pub(crate) fn stored_columns(crypto: &Crypto, item: &MemoryItem) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    if !item.sensitivity.encrypted_at_rest() {
+        return Ok((item.value.clone(), serde_json::to_value(&item.provenance)?));
+    }
+    let provenance: Vec<Provenance> = item.provenance.iter().cloned().map(|p| Provenance { note: None, ..p }).collect();
+    Ok((crypto.encrypt(&item.user_id, &item.value)?, serde_json::to_value(provenance)?))
+}
+
 async fn upsert_pg(pool: &PgPool, crypto: &Crypto, item: &MemoryItem) -> anyhow::Result<()> {
-    let value = if item.sensitivity.encrypted_at_rest() { crypto.encrypt(&item.user_id, &item.value)? } else { item.value.clone() };
+    let (value, provenance) = stored_columns(crypto, item)?;
     sqlx::query(
         "INSERT INTO memory_items (id, user_id, domain, category, key, value, kind, confidence, sensitivity, source_agent, provenance, consent_id, created_at, updated_at, expires_at, deleted_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
@@ -434,7 +444,7 @@ async fn upsert_pg(pool: &PgPool, crypto: &Crypto, item: &MemoryItem) -> anyhow:
     .bind(item.confidence)
     .bind(item.sensitivity.as_str())
     .bind(&item.source_agent)
-    .bind(serde_json::to_value(&item.provenance)?)
+    .bind(provenance)
     .bind(item.consent_id)
     .bind(item.created_at)
     .bind(item.updated_at)

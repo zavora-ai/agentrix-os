@@ -49,6 +49,20 @@ impl Crypto {
         *Key::<Aes256Gcm>::from_slice(&out)
     }
 
+    /// A content-free, stable identifier for `text`: the first 16 hex digits of
+    /// HMAC-SHA256(master, user id, text). The same statement from the same user maps to the
+    /// same id, so a repeated "remember …" updates one item, but the id reveals nothing without
+    /// the master key. Used for memory keys that would otherwise be a slug of a sensitive
+    /// statement.
+    pub fn opaque_id(&self, user_id: &str, text: &str) -> String {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.master).expect("hmac key");
+        mac.update(b"memory-key:");
+        mac.update(user_id.as_bytes());
+        mac.update(b":");
+        mac.update(text.trim().to_lowercase().as_bytes());
+        mac.finalize().into_bytes()[..8].iter().map(|b| format!("{b:02x}")).collect()
+    }
+
     pub fn encrypt(&self, user_id: &str, plaintext: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let cipher = Aes256Gcm::new(&self.user_key(user_id));
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -95,5 +109,16 @@ mod tests {
         assert_eq!(c.decrypt("user-a", &enc).unwrap(), v);
         assert!(c.decrypt("user-b", &enc).is_err(), "another user's key must not decrypt");
         assert!(Crypto::from_master("other").decrypt("user-a", &enc).is_err(), "rotated master must not decrypt");
+    }
+
+    #[test]
+    fn memory_opaque_id_is_stable_per_user_and_content_free() {
+        let c = Crypto::from_master("test-master");
+        let id = c.opaque_id("user-a", "My medication is lisinopril");
+        assert_eq!(id.len(), 16);
+        assert!(id.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert_eq!(id, c.opaque_id("user-a", " my medication is LISINOPRIL "), "normalized before hashing");
+        assert_ne!(id, c.opaque_id("user-b", "My medication is lisinopril"));
+        assert_ne!(id, Crypto::from_master("other").opaque_id("user-a", "My medication is lisinopril"));
     }
 }
