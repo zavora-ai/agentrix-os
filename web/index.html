@@ -896,6 +896,36 @@
   </div>
 
 <script>
+// Text from the server, integrations and models is untrusted. Plain fields go through esc();
+// fields that carry markup (Suzy and Mother summaries, card lines) through safeHtml(), which keeps
+// only b/i/em/strong/br without attributes and turns everything else into text.
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
+}
+const SAFE_TAGS = new Set(['B', 'I', 'EM', 'STRONG', 'BR']);
+const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'IFRAME', 'OBJECT', 'EMBED', 'NOSCRIPT', 'TEXTAREA', 'TITLE', 'SVG', 'MATH']);
+function safeHtml(html){
+  const tpl = document.createElement('template');   // inert: nothing in it runs or loads
+  tpl.innerHTML = String(html ?? '');
+  (function clean(node){
+    [...node.childNodes].forEach((n) => {
+      if (n.nodeType === Node.TEXT_NODE) return;
+      const tag = n.nodeName.toUpperCase();
+      if (n.nodeType !== Node.ELEMENT_NODE || DROP_TAGS.has(tag)) { n.remove(); return; }
+      clean(n);
+      if (SAFE_TAGS.has(tag)) [...n.attributes].forEach((a) => n.removeAttribute(a.name));
+      else n.replaceWith(...n.childNodes);
+    });
+  })(tpl.content);
+  return tpl.innerHTML;
+}
+// Links from the server: http(s) or a same-origin path, never javascript: or //other-host.
+function safeUrl(u){
+  const s = String(u ?? '').trim();
+  return /^(https?:\/\/|\/(?![\/\\]))/i.test(s) ? s : '#';
+}
+window.AgentrixHtml = { esc, safeHtml, safeUrl };
+
 const __isLocalHost = () => /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 let SIGNUP_ENDPOINT = 'https://formspree.io/f/xwvzgbee';
 let LINKEDIN_CONVERSION_ID = 28504817;
@@ -946,7 +976,7 @@ async function hydrateAuthPill() {
     if (res.ok) {
       const user = await res.json();
       const label = user.name || user.email || 'Signed in';
-      pill.innerHTML = `<span class="signed">${label}</span><button type="button" id="authLogout">Sign out</button>`;
+      pill.innerHTML = `<span class="signed">${esc(label)}</span><button type="button" id="authLogout">Sign out</button>`;
       document.getElementById('authLogout')?.addEventListener('click', async () => {
         await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
         location.reload();
@@ -1173,9 +1203,9 @@ function buildCard(s){
   el.innerHTML = `
     <div class="pill">● Act now</div>
     <div class="head">
-      <div class="glyph">${s.glyph}</div>
-      <div><div class="title">${s.title}</div>
-      <div class="agent"><span class="status working"></span><span class="st">working…</span> · ${s.agent}</div></div>
+      <div class="glyph">${esc(s.glyph)}</div>
+      <div><div class="title">${esc(s.title)}</div>
+      <div class="agent"><span class="status working"></span><span class="st">working…</span> · ${esc(s.agent)}</div></div>
     </div>
     <div class="body"><div class="skel"></div><div class="skel s2"></div><div class="skel s3"></div></div>
     <div class="gist"></div>
@@ -1363,7 +1393,7 @@ function fuse(target, source){
   const note = `Recomputing ${tt} with your ${st.toLowerCase()}…`;
   const body = target.querySelector('.body');
   target.classList.remove('compact');
-  body.innerHTML = `<div class="line sub">${note}</div>`;
+  body.innerHTML = `<div class="line sub">${esc(note)}</div>`;
   target.querySelector('.st').textContent = 'fusing…';
   target.querySelector('.status').className = 'status working';
   target.classList.add('child');
@@ -1371,7 +1401,7 @@ function fuse(target, source){
   setTimeout(() => {
     body.innerHTML = '';
     addLine(body, `<div class="big">Updated</div>`, 0);
-    addLine(body, `<div class="sub">${tt} now reflects your ${st.toLowerCase()}.</div>`, 80);
+    addLine(body, `<div class="sub">${esc(tt)} now reflects your ${esc(st.toLowerCase())}.</div>`, 80);
     target.querySelector('.st').textContent = 'done';
     target.querySelector('.status').className = 'status';
     target.classList.remove('fusing');
@@ -1491,10 +1521,10 @@ function fillDetail(el, s){
   const out = det.out || (s.resolve?.big ? [s.resolve.big] : ['Result ready']);
   d.innerHTML = `
     <h4>Agent actions</h4>
-    ${actions.map(a => `<div class="arow"><span class="ai">✓</span>${a}<span class="prog">done</span></div>`).join('')}
+    ${actions.map(a => `<div class="arow"><span class="ai">✓</span>${safeHtml(a)}<span class="prog">done</span></div>`).join('')}
     <div class="trays">
-      <div class="tray in"><h4>In-tray</h4>${inbox.map(t => `<div class="ti">${t}</div>`).join('') || '<div class="empty">empty</div>'}</div>
-      <div class="tray out"><h4>Out-tray</h4>${out.map(t => `<div class="ti">${t}</div>`).join('') || '<div class="empty">empty</div>'}</div>
+      <div class="tray in"><h4>In-tray</h4>${inbox.map(t => `<div class="ti">${safeHtml(t)}</div>`).join('') || '<div class="empty">empty</div>'}</div>
+      <div class="tray out"><h4>Out-tray</h4>${out.map(t => `<div class="ti">${safeHtml(t)}</div>`).join('') || '<div class="empty">empty</div>'}</div>
     </div>`;
 }
 
@@ -1508,11 +1538,11 @@ function resolve(card, s, spec){
     card.body.innerHTML = '';
   }
   if (r.big){
-    addLine(card.body, `<div class="big">${r.big}</div>`, 0);
-    addLine(card.body, `<div class="sub">${r.sub}</div>`, 80);
+    addLine(card.body, `<div class="big">${safeHtml(r.big)}</div>`, 0);
+    addLine(card.body, `<div class="sub">${safeHtml(r.sub)}</div>`, 80);
   }
   if (r.lines){
-    r.lines.forEach((l, k) => addLine(card.body, `<div style="margin:7px 0">${l}</div>`, k*110));
+    r.lines.forEach((l, k) => addLine(card.body, `<div style="margin:7px 0">${safeHtml(l)}</div>`, k*110));
   }
   card.status.className = 'status'; // resolved -> steady green
   card.stText.textContent = 'done';
@@ -1776,11 +1806,11 @@ const demoPeople = {
   family: [['MA','Mara','💚 home',true],['DAD','Dad','called 2×',false]],
 };
 function peopleTileRow(a) {
-  return `<div class="tile"><div class="av">${a[0].length>2?'#':''}${a[0].slice(0,2)}</div>
-    <div class="who">${a[1]}<small>${a[2]}</small></div>${a[3]?'<span class="live"></span>':''}</div>`;
+  return `<div class="tile"><div class="av">${a[0].length>2?'#':''}${esc(a[0].slice(0,2))}</div>
+    <div class="who">${esc(a[1])}<small>${esc(a[2])}</small></div>${a[3]?'<span class="live"></span>':''}</div>`;
 }
 function renderPeopleRail(work, family, message) {
-  const empty = (msg) => `<div class="agents-empty">${msg}</div>`;
+  const empty = (msg) => `<div class="agents-empty">${esc(msg)}</div>`;
   document.getElementById('peopleWork').innerHTML = work?.length
     ? work.map(peopleTileRow).join('')
     : empty(message || 'No team data yet');
@@ -1817,9 +1847,9 @@ function renderProactiveTile(a) {
   const working = a.status === 'working';
   // ADR-002: research is a work agent; scout and maker live in the home world (lens filtering)
   const dom = a.id === 'research' ? ' dom-work' : (a.id === 'scout' || a.id === 'maker') ? ' dom-home' : '';
-  return `<div class="tile proactive${dom}" data-id="${a.id}">
-    <div class="av">${a.glyph}</div>
-    <div class="who">${a.name}<small>${a.task || a.tasks?.[0] || ''}</small></div>
+  return `<div class="tile proactive${dom}" data-id="${esc(a.id)}">
+    <div class="av">${esc(a.glyph)}</div>
+    <div class="who">${esc(a.name)}<small>${esc(a.task || a.tasks?.[0] || '')}</small></div>
     ${working ? '<span class="live"></span>' : ''}</div>`;
 }
 function applyProactiveAgents(agents) {
@@ -1878,9 +1908,9 @@ const lfTrack = document.getElementById('lfTrack');
 const lfDots = document.getElementById('lfDots');
 let liveSlides = [], lfIdx = 0, lfTimer;
 function liveSlideHtml(s) {
-  return `<div class="lf-slide ${s.cls||''}">
-    <div class="lf-head"><span class="lf-logo">${s.logo}</span>${s.name}<span class="lf-when">${s.when}</span></div>
-    <div class="lf-body">${s.body}</div><div class="lf-meta">${s.meta||''}</div></div>`;
+  return `<div class="lf-slide ${esc(s.cls||'')}">
+    <div class="lf-head"><span class="lf-logo">${esc(s.logo)}</span>${esc(s.name)}<span class="lf-when">${esc(s.when)}</span></div>
+    <div class="lf-body">${esc(s.body)}</div><div class="lf-meta">${esc(s.meta||'')}</div></div>`;
 }
 function renderLiveFeed(slides) {
   liveSlides = slides || [];
@@ -1945,14 +1975,14 @@ async function hydrateLiveFeed() {
 function mountBgCards(cardDefs) {
   const bg = document.getElementById('bgcards');
   const cardHtml = (c) => {
-    const rows = (c.rows || []).map(r => `<div class="bc-row">${r.label}<small>${r.detail}</small></div>`).join('');
+    const rows = (c.rows || []).map(r => `<div class="bc-row">${esc(r.label)}<small>${esc(r.detail)}</small></div>`).join('');
     const act = (c.activity && c.activity[0]) || c.intent || '';
     return `<div class="bgcard">
-      <div class="bc-head"><div class="bc-ic">${c.icon}</div>
-        <div><div class="bc-title">${c.title}</div><div class="bc-sub">${c.sub}</div></div></div>
-      ${rows}<div class="bc-row bc-act"><small style="margin:0">${act}</small></div></div>`;
+      <div class="bc-head"><div class="bc-ic">${esc(c.icon)}</div>
+        <div><div class="bc-title">${esc(c.title)}</div><div class="bc-sub">${esc(c.sub)}</div></div></div>
+      ${rows}<div class="bc-row bc-act"><small style="margin:0">${esc(act)}</small></div></div>`;
   };
-  bg.innerHTML = cardDefs.map(c => `<div class="bg-slot" data-side="${c.side}" data-y="${c.y}">${cardHtml(c)}</div>`).join('');
+  bg.innerHTML = cardDefs.map(c => `<div class="bg-slot" data-side="${esc(c.side)}" data-y="${esc(c.y)}">${cardHtml(c)}</div>`).join('');
   bg.querySelectorAll('.bg-slot').forEach((slot, i) => {
     const c = cardDefs[i], el = slot.firstElementChild;
     const left = c.side === 'l';
@@ -2020,7 +2050,7 @@ const active = new Map();   // agentId -> tile
 const resting = new Map();
 
 function agentId(s){ return s.agent || s.title; }
-function emptyMsg(el, msg){ if (!el.querySelector('.tile')) el.innerHTML = `<div class="agents-empty">${msg}</div>`; }
+function emptyMsg(el, msg){ if (!el.querySelector('.tile')) el.innerHTML = `<div class="agents-empty">${esc(msg)}</div>`; }
 function resetAgents(){
   active.clear(); resting.clear();
   activeEl.innerHTML = '<div class="agents-empty">None running</div>';
@@ -2036,13 +2066,13 @@ function agentActive(s){
   t.className = 'tile agent-tile'; t.dataset.id = id;
   if (s.domain === 'work' || s.domain === 'home') t.classList.add('dom-' + s.domain);
   t.dataset.agent = s.agent || ''; t.dataset.title = s.title || '';
-  t.innerHTML = `<div class="spin"></div><div class="who">${s.title}<small>${id}</small></div>`;
+  t.innerHTML = `<div class="spin"></div><div class="who">${esc(s.title)}<small>${esc(id)}</small></div>`;
   applyModeBadge(t, s.agent, s.title);
   activeEl.appendChild(t); active.set(id, { tile:t, spec:s });
 }
 function agentDone(s){
   const id = agentId(s), e = active.get(id); if (!e) return;
-  e.tile.querySelector('.spin').outerHTML = `<div class="av">${s.glyph}</div>`;
+  e.tile.querySelector('.spin').outerHTML = `<div class="av">${esc(s.glyph)}</div>`;
   e.tile.querySelector('small').textContent = 'done';
 }
 // snooze: move an agent (from its card) into Resting
@@ -2056,7 +2086,7 @@ function snoozeAgent(title){
   const t = document.createElement('div');
   t.className = 'tile resting'; t.dataset.id = id;
   t.dataset.agent = spec.agent || ''; t.dataset.title = spec.title || '';
-  t.innerHTML = `<div class="av">${spec.glyph}</div><div class="who">${spec.title}<small>snoozed</small></div><span class="zzz">z</span>`;
+  t.innerHTML = `<div class="av">${esc(spec.glyph)}</div><div class="who">${esc(spec.title)}<small>snoozed</small></div><span class="zzz">z</span>`;
   applyModeBadge(t, spec.agent, spec.title);
   t.addEventListener('click', () => wakeAgent(id, spec));
   restingEl.appendChild(t); resting.set(id, spec);
@@ -2111,7 +2141,7 @@ function hydrateAgents(payload){
     t.className = 'tile resting';
     t.dataset.id = id;
     t.dataset.agent = spec.agent || ''; t.dataset.title = spec.title || '';
-    t.innerHTML = `<div class="av">${spec.glyph}</div><div class="who">${spec.title}<small>snoozed</small></div><span class="zzz">z</span>`;
+    t.innerHTML = `<div class="av">${esc(spec.glyph)}</div><div class="who">${esc(spec.title)}<small>snoozed</small></div><span class="zzz">z</span>`;
     applyModeBadge(t, spec.agent, spec.title);
     t.addEventListener('click', () => wakeAgent(id, spec));
     restingEl.appendChild(t);
@@ -2252,7 +2282,7 @@ async function playGreeting(){
   if (greetingBusy) return; greetingBusy = true;
   const caption = greetingCaption();
   const words = caption.split(' ');
-  greetCC.innerHTML = words.map(w => `<span class="w">${w}</span>`).join(' ');
+  greetCC.innerHTML = words.map(w => `<span class="w">${esc(w)}</span>`).join(' ');
   greetCC.classList.add('show');
   const spans = [...greetCC.querySelectorAll('.w')];
   const live = window.AgentrixLiveVoice;
@@ -2413,11 +2443,11 @@ function finishDeck(opts){
   const body = deck.querySelector('.body');
   body.innerHTML = '';
   if (!body.querySelector('.work')) buildSurface(body, 'slides');
-  addLine(body, `<div class="big">${big}</div>`, 0);
-  addLine(body, `<div class="sub">${sub}</div>`, 80);
+  addLine(body, `<div class="big">${safeHtml(big)}</div>`, 0);
+  addLine(body, `<div class="sub">${safeHtml(sub)}</div>`, 80);
   addLine(body, `<div class="stamp">● saved · v1 · just now</div>`, 160);
   if (opts?.artifact_url) {
-    addLine(body, `<a class="btn primary" href="${opts.artifact_url}" target="_blank" rel="noopener">Open deck</a>`, 240);
+    addLine(body, `<a class="btn primary" href="${esc(safeUrl(opts.artifact_url))}" target="_blank" rel="noopener">Open deck</a>`, 240);
   }
   deck.querySelector('.st').textContent = 'pinned';
   sfx('ding');
@@ -2520,7 +2550,7 @@ window.__AGENTRIX_UI__ = {
   applyModeBadges,
   armSuggestion,
   showSuzyCustom(html, opts) {
-    suzyText.innerHTML = html;
+    suzyText.innerHTML = safeHtml(html);
     suzy.classList.add('show');
     // Summaries are read aloud through Gemini Live (opts.speak); toasts and hints stay silent.
     if (opts?.speak && !window.__AGENTRIX_DEMO__) window.AgentrixLiveVoice?.speakText?.(suzyText.textContent);

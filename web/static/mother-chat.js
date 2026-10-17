@@ -37,7 +37,8 @@
       const d = document.createElement('div');
       d.className = 'chat-turn ' + role;
       if (role === 'user') d.textContent = content;
-      else d.innerHTML = content; // Mother replies carry the same <b> markup as Suzy summaries
+      // Mother replies carry the same <b> markup as Suzy summaries; nothing else survives.
+      else d.innerHTML = window.AgentrixHtml.safeHtml(content);
       if (ts) d.title = new Date(ts).toLocaleString();
       list.appendChild(d);
       list.scrollTop = list.scrollHeight;
@@ -157,7 +158,7 @@
       if (ev.type === 'suzy_summary') {
         if (pendingEl) {
           pendingEl.classList.remove('pending');
-          pendingEl.innerHTML = ev.html || '';
+          pendingEl.innerHTML = window.AgentrixHtml.safeHtml(ev.html || '');
           pendingEl.title = new Date().toLocaleString();
           pendingEl = null;
         } else {
