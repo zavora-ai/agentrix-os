@@ -2335,6 +2335,39 @@ async fn tasks_tools_pass_through_the_permission_gate() {
     assert!(denied_count >= 1);
 }
 
+/// `plan_day` with `domain: "shared"` from a world agent narrows to shared tasks; it used to
+/// replace the agent's scope with `shared`, which sees every world.
+#[tokio::test]
+async fn tasks_plan_day_keeps_world_agents_in_their_world() {
+    use spatial_os::domain::Domain;
+    use spatial_os::tools::tasks::{store_handle, NewTask, Priority, TaskKind, TasksTools};
+
+    let user = adk_tool::SimpleToolContext::new("x").user_id().to_string();
+    let marker = uuid::Uuid::new_v4().to_string();
+    for (domain, title) in [(Domain::Home, format!("home-{marker}")), (Domain::Shared, format!("shared-{marker}"))] {
+        store_handle()
+            .create(&user, NewTask { domain, title: &title, kind: TaskKind::Task, due: Some(chrono::Utc::now()), duration_minutes: None, priority: Priority::Normal, source_agent: "test", notes: None })
+            .await;
+    }
+
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(adk_tool::SimpleToolContext::new("test"));
+    let plan_of = |agent: &'static str| {
+        let ctx = ctx.clone();
+        async move {
+            let tools = TasksTools::for_agent(agent).tools(ctx).await.unwrap();
+            let plan_day = tools.into_iter().find(|t| t.name() == "plan_day").unwrap();
+            let out = plan_day.execute(tool_ctx("s-plan"), serde_json::json!({"domain": "shared"})).await.unwrap();
+            assert_eq!(out["status"], "ok", "{out}");
+            serde_json::to_string(&out["plan"]).unwrap()
+        }
+    };
+    assert_eq!(spatial_os::tools::allowlist::catalog().world_for("calendar_agent"), Domain::Work);
+    let work = plan_of("calendar_agent").await;
+    assert!(work.contains(&format!("shared-{marker}")), "shared tasks are in a work agent's plan");
+    assert!(!work.contains(&format!("home-{marker}")), "home tasks never reach a work agent: {work}");
+    assert!(!work.contains("\"domain\":\"home\""), "no home task at all reaches a work agent");
+}
+
 #[tokio::test]
 async fn tasks_toolset_is_attached_only_to_agents_that_allowlist_it() {
     let inner: Arc<dyn adk_core::Toolset> = Arc::new(FakeInboxTools);
