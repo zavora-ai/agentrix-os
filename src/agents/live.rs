@@ -30,11 +30,7 @@ async fn headlines_agent(
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.25),
-            max_output_tokens: Some(4096),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.25, 4096))
         .build()?;
     Ok(Arc::new(agent))
 }
@@ -58,11 +54,7 @@ async fn markets_agent(
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.2),
-            max_output_tokens: Some(4096),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.2, 4096))
         .build()?;
     Ok(Arc::new(agent))
 }
@@ -85,11 +77,7 @@ async fn now_agent(
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.3),
-            max_output_tokens: Some(4096),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.3, 4096))
         .build()?;
     Ok(Arc::new(agent))
 }

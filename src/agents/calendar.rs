@@ -26,11 +26,7 @@ Rules:
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.2),
-            max_output_tokens: Some(8192),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.2, 8192))
         .build()?;
 
     Ok(Arc::new(agent))

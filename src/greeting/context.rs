@@ -15,6 +15,8 @@ pub struct CalendarFacts {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct InboxFacts {
+    /// Unread messages among the most recent (`is_read == false`); the closest honest proxy for
+    /// "needs you" the email MCP gives. Messages without a read flag are not counted.
     pub needs_reply: usize,
     pub subjects: Vec<String>,
 }
@@ -115,11 +117,11 @@ async fn fetch_calendar(toolset: Arc<dyn adk_core::Toolset>) -> Option<CalendarF
     )
     .await?;
     let output = mcp_exec::tool_output_string(&resp)?;
+    // An unparseable output ("Error: token expired") is no fact at all, not an empty calendar.
     let events = serde_json::from_str::<serde_json::Value>(output)
         .ok()
         .and_then(|v| v.as_array().cloned())
-        .or_else(|| resp.get("events").and_then(|v| v.as_array()).cloned())
-        .unwrap_or_default();
+        .or_else(|| resp.get("events").and_then(|v| v.as_array()).cloned())?;
 
     let first = events.first();
     Some(CalendarFacts {
@@ -144,19 +146,23 @@ async fn fetch_inbox(toolset: Arc<dyn adk_core::Toolset>) -> Option<InboxFacts> 
     let messages = serde_json::from_str::<serde_json::Value>(output)
         .ok()
         .and_then(|v| v.as_array().cloned())
-        .or_else(|| resp.get("messages").and_then(|v| v.as_array()).cloned())
-        .unwrap_or_default();
+        .or_else(|| resp.get("messages").and_then(|v| v.as_array()).cloned())?;
+    Some(inbox_facts(&messages))
+}
 
-    let subjects: Vec<String> = messages
+fn inbox_facts(messages: &[serde_json::Value]) -> InboxFacts {
+    let unread: Vec<&serde_json::Value> = messages
         .iter()
-        .take(3)
-        .filter_map(|m| m.get("subject").and_then(|s| s.as_str()).map(str::to_string))
+        .filter(|m| m.get("is_read").and_then(|r| r.as_bool()) == Some(false))
         .collect();
-
-    Some(InboxFacts {
-        needs_reply: messages.len(),
-        subjects,
-    })
+    InboxFacts {
+        needs_reply: unread.len(),
+        subjects: unread
+            .iter()
+            .take(3)
+            .filter_map(|m| m.get("subject").and_then(|s| s.as_str()).map(str::to_string))
+            .collect(),
+    }
 }
 
 fn headline_from_articles(articles: &[serde_json::Value]) -> Option<NewsFacts> {
@@ -278,5 +284,18 @@ mod tests {
         assert_eq!(salutation_for_hour(8), "Good morning");
         assert_eq!(salutation_for_hour(14), "Good afternoon");
         assert_eq!(salutation_for_hour(21), "Good evening");
+    }
+
+    #[test]
+    fn inbox_counts_only_unread_messages() {
+        let messages = serde_json::json!([
+            {"subject": "Contract", "is_read": false},
+            {"subject": "Newsletter", "is_read": true},
+            {"subject": "No flag"},
+            {"subject": "Launch date", "is_read": false}
+        ]);
+        let facts = inbox_facts(messages.as_array().unwrap());
+        assert_eq!(facts.needs_reply, 2);
+        assert_eq!(facts.subjects, vec!["Contract", "Launch date"]);
     }
 }
