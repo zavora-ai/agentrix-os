@@ -9,7 +9,7 @@
 //! Like the other R1 services it is installed process-wide at boot (`init`) with an in-memory
 //! default when no database is configured (ADR-006).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -67,7 +67,7 @@ pub fn normalize_category(raw: &str) -> Option<String> {
 #[derive(Default)]
 struct Inner {
     users: HashMap<String, Vec<Consent>>,
-    loaded: HashSet<String>,
+    loads: crate::db::UserLoads,
 }
 
 #[derive(Clone)]
@@ -92,18 +92,31 @@ impl ConsentStore {
         self.pg.is_some()
     }
 
+    /// Load the user's consents on first touch; a database error leaves the user unloaded so a
+    /// later touch reads again. Consents granted or revoked here meanwhile are newer and win.
     async fn ensure_loaded(&self, user_id: &str) {
         let Some(pool) = &self.pg else { return };
-        if self.inner.read().await.loaded.contains(user_id) {
+        if !self.inner.read().await.loads.should_load(user_id) {
             return;
         }
-        let rows = load_pg(pool, user_id).await.unwrap_or_else(|e| {
-            tracing::warn!("consents load failed: {e:#}");
-            Vec::new()
-        });
-        let mut guard = self.inner.write().await;
-        guard.users.insert(user_id.to_string(), rows);
-        guard.loaded.insert(user_id.to_string());
+        match load_pg(pool, user_id).await {
+            Ok(mut rows) => {
+                let mut guard = self.inner.write().await;
+                if guard.loads.is_loaded(user_id) {
+                    return;
+                }
+                for consent in guard.users.remove(user_id).unwrap_or_default() {
+                    rows.retain(|r| r.id != consent.id);
+                    rows.push(consent);
+                }
+                guard.users.insert(user_id.to_string(), rows);
+                guard.loads.succeeded(user_id);
+            }
+            Err(e) => {
+                tracing::warn!("consents load failed; retrying on a later request: {e:#}");
+                self.inner.write().await.loads.failed(user_id);
+            }
+        }
     }
 
     async fn insert_pg(&self, c: &Consent) {

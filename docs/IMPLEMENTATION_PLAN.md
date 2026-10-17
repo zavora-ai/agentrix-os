@@ -46,7 +46,7 @@ Offline (no API key, no Postgres) — everything streams its mock, the Mother st
 
 - [ ] `cargo test --lib` and `cargo test --test validate -- mother_ domain_ gate_ permission_ pending_ ledger_ memory_ effects_` are green
 - [ ] `cargo run` → `GET /health` reports `"phase": "P2-S3"`; `GET /awp/manifest` lists `chat_mother`, `list_actions`, `approve_action`, `get_permissions`, `set_permissions`, `pause_agents`, `record_ui_events`, `manage_memory`
-- [ ] `POST /api/sessions/{sid}/chat {"text":"What's happening with work?"}` → one `scenario` event with `total_cards: 6`, cards re-indexed 0–5, one `suzy_summary` with `key: "mother"`, `done`
+- [ ] `POST /api/sessions/{sid}/chat {"text":"What's happening with work?"}` → one `scenario` event with `total_cards: 8` (morning 3 + people 3 + the Work Mother's two labeled stubs), cards re-indexed 0–7, one `suzy_summary` with `key: "mother"`, `done`
 - [ ] `{"text":"Build me a pitch deck"}` → unchanged deck stream; `{"text":"hmm"}` → one clarifying question
 - [ ] `{"text":"Remember I live in Nairobi"}` → "I'll remember" reply; `GET /api/greeting?session_id={sid}` uses Nairobi for weather when the weather MCP is connected
 - [ ] `GET /api/memory?session_id={sid}` without a JWT → AWP error envelope (403); with dev sign-in → the item with `kind: "known"` and `provenance[0].kind: "user_statement"`

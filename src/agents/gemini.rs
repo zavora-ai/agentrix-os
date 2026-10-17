@@ -133,9 +133,13 @@ pub fn filtered_for_agent(
     let refs: Vec<&str> = allowed.iter().map(|s| s.as_str()).collect();
     let filtered = filtered(wrap_toolset(toolset), &refs);
     let gated = crate::permissions::PermissionGate::wrap(agent, filtered);
-    // Every agent can read memory within its world and propose assumed items (S3-T3).
-    let mut parts: Vec<Arc<dyn adk_core::Toolset>> =
-        vec![gated, crate::memory::tools::MemoryTools::for_agent(agent)];
+    // Every agent can read memory within its world and propose assumed items (S3-T3), through
+    // the same gate: `propose_memory` is write_local, so observe denies it and pause blocks it.
+    let memory = crate::permissions::PermissionGate::wrap(
+        agent,
+        crate::memory::tools::MemoryTools::for_agent(agent),
+    );
+    let mut parts: Vec<Arc<dyn adk_core::Toolset>> = vec![gated, memory];
     // Built-in toolsets are opted into per agent through a pseudo `mcp_server` entry in the
     // allowlist, so their tools carry effects and pass the same gate (S4-T3: `tasks`).
     let spec = crate::tools::allowlist::catalog().spec_for(agent);

@@ -170,6 +170,20 @@ method = "POST"
 access_level = "known"
 
 [[capabilities]]
+name = "list_subscriptions"
+description = "List AWP webhook subscriptions (subscriber names, callback URLs, event types; never the signing secret)"
+endpoint = "/awp/events/subscriptions"
+method = "GET"
+access_level = "known"
+
+[[capabilities]]
+name = "delete_subscription"
+description = "Delete an AWP webhook subscription by id"
+endpoint = "/awp/events/subscriptions/{id}"
+method = "DELETE"
+access_level = "known"
+
+[[capabilities]]
 name = "stream_voice"
 description = "WebSocket stream for Suzy live voice (mic PCM in, spoken PCM out); submit_intent tool runs orchestration in background"
 endpoint = "/ws/voice"

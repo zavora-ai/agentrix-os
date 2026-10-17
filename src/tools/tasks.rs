@@ -13,7 +13,7 @@
 //! profile timezone lands in memory (S3 follow-up).
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use adk_tool::FunctionTool;
@@ -262,7 +262,7 @@ pub struct DayPlan {
 #[derive(Default)]
 struct Inner {
     users: HashMap<String, Vec<Task>>,
-    loaded: HashSet<String>,
+    loads: crate::db::UserLoads,
 }
 
 #[derive(Clone)]
@@ -287,18 +287,31 @@ impl TaskStore {
         self.pg.is_some()
     }
 
+    /// Load the user's tasks on first touch; a database error leaves the user unloaded so a later
+    /// touch reads again. Tasks written here meanwhile are newer than their stored rows and win.
     async fn ensure_loaded(&self, user_id: &str) {
         let Some(pool) = &self.pg else { return };
-        if self.inner.read().await.loaded.contains(user_id) {
+        if !self.inner.read().await.loads.should_load(user_id) {
             return;
         }
-        let rows = load_pg(pool, user_id).await.unwrap_or_else(|e| {
-            tracing::warn!("tasks load failed: {e:#}");
-            Vec::new()
-        });
-        let mut guard = self.inner.write().await;
-        guard.users.insert(user_id.to_string(), rows);
-        guard.loaded.insert(user_id.to_string());
+        match load_pg(pool, user_id).await {
+            Ok(mut rows) => {
+                let mut guard = self.inner.write().await;
+                if guard.loads.is_loaded(user_id) {
+                    return;
+                }
+                for task in guard.users.remove(user_id).unwrap_or_default() {
+                    rows.retain(|r| r.id != task.id);
+                    rows.push(task);
+                }
+                guard.users.insert(user_id.to_string(), rows);
+                guard.loads.succeeded(user_id);
+            }
+            Err(e) => {
+                tracing::warn!("tasks load failed; retrying on a later request: {e:#}");
+                self.inner.write().await.loads.failed(user_id);
+            }
+        }
     }
 
     async fn persist(&self, task: &Task) {

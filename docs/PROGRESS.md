@@ -54,11 +54,9 @@ The only hard cross-track dependency is that observations surface inside the bri
 
 | Team sprint | Dates | James | Kim | Robert | Jotham | Tag on completion |
 |---|---|---|---|---|---|---|
-| A | TBD | 🟡 | ⬜ | ⬜ | ✅ | `v1.4.0-p2` |
-| A | TBD | 🟡 | 🟡 | ⬜ | 🟡 | `v1.4.0-p2` |
-| A | TBD | 🟡 | ✅ | ⬜ | 🟡 | `v1.4.0-p2` |
-| B | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.5.0-p2` |
-| C | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.6.0-p2` (R2) |
+| A | TBD | 🟡 | ✅ | ✅ | ✅ | `v1.4.0-p2` |
+| B | TBD | ⬜ | ✅ | ⬜ | ⬜ | `v1.5.0-p2` |
+| C | TBD | ⬜ | 🟡 | ⬜ | ⬜ | `v1.6.0-p2` (R2) |
 | D | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.9.0-p2` (R3) |
 | E | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.11.0-p2` |
 | F | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v2.0.0-beta` (R4) |
@@ -86,7 +84,7 @@ Owns migrations, stores, routes, the SSE enum, the manifest and the allowlist fi
 
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|
-| **A** | S0 follow-ups · S4-T3 · S11-T4 · S7-T1 migration | **ADR-005 tenancy** (one instance per person vs. multi-user with per-user MCP credentials and per-user scheduling) and **ADR-006 prerequisites** (Phase 2 requires login + Postgres; anonymous/in-memory path = demo only). Tasks migration 008 and task tools. Consent persistence pulled forward from S11 (replaces `InMemoryConsentService`). Migration 010 for Jotham. **Run and sign off the R1 validation script.** | Tenancy answer decides his own and Kim's sprint B | 🟡 PR #6 (ADRs, CI) and PR #9 (tasks, consents, migration 010) open; R1 offline validation run on #9, dev-sign-in and live parts pending |
+| **A** | S0 follow-ups · S4-T3 · S11-T4 · S7-T1 migration | **ADR-005 tenancy** (one instance per person vs. multi-user with per-user MCP credentials and per-user scheduling) and **ADR-006 prerequisites** (Phase 2 requires login + Postgres; anonymous/in-memory path = demo only). Tasks migration 008 and task tools. Consent persistence pulled forward from S11 (replaces `InMemoryConsentService`). Migration 010 for Jotham. **Run and sign off the R1 validation script.** | Tenancy answer decides his own and Kim's sprint B | 🟡 PR #6 (ADRs, CI) and PR #9 (tasks, consents, migration 010) merged; R1 offline validation run on #9, dev-sign-in and live parts pending |
 | **B** | S5-T3 migration · S5-T6 · S5-T7 boot check · S5-T8 | Contacts migration 009. Separate work and home OAuth identities. Per-user credential injection into MCP children if ADR-005 says multi-tenant. Finance allowlist read-only boot check. HealthKit importer (moves to the fifth seat when filled). | Family agent to Kim | ⬜ |
 | **C** | S6-T6 route · S6-T7 · S8-T3 | Briefing route `GET /api/briefing/today`, `briefing` SSE event, briefing cron wiring. Boundaries migration 011 and `GET/PUT /api/boundaries`. **R2 sign-off.** | Briefing payload to Robert and Kim | ⬜ |
 | **D** | S9-T2 · S11-T5 · S7-T5 review | Knowledge migration 012. Retention policies 013 and nightly purge job. Review Jotham's `observation` event into `FieldEvent`. **R3 sign-off.** | Knowledge API to Robert | ⬜ |
@@ -102,8 +100,8 @@ Owns the mother, worlds, agents and briefing modules. Re-homing is metadata on e
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|
 | **A** | S4-T1 · S4-T2 · S4-T4 · S4-T5 · S4-T6 · S4-T7 · S4-T9 | `work_mother` parallel fan-out returning one structured result. Work agents tagged and scoped (productivity, email, team_comms, project, research_knowledge, work_automation). Email follow-up tracker from hashed subjects. Career and Professional Social as **labeled stubs** (BK-101). Allowlist entries with effects and default modes. Tests: fan-out ≥ 3 results, 3-day-old thread flagged, no finance/health tools in any work agent. | S4-T3 landed in PR #9: Productivity inherits the `tasks` toolset through `calendar_agent`; the morning calendar adapter still fills the cards | ✅ merged in PR #5 |
-| **B** | S5-T1 · S5-T2 · S5-T3 agent · S5-T4 · S5-T5 · S5-T7 prompt · S5-T9 | `home_mother`. Home agents re-homed (finance, health_wellness, entertainment, social_fun, travel). Family agent (calendar id from memory, imported contacts, important dates) and Personal Productivity agent. Personal Social labeled stub (BK-102). Health prompt guardrail (no diagnosis vocabulary, escalation sentence). Tests: family routing, finance has zero non-read tools, health lint blocks a diagnosis, identity separation. | Contacts from memory + `CONTACTS_CSV_PATH` until migration 009. Personal Productivity reads the shared `tasks` store (S4-T3) and carries its five tools, scoped to home | 🟡 `phase2/S05-home-world` (PR #7, after #5) |
-| **C** | S6-T1 · S6-T2 · S6-T3 · S6-T4 · S6-T5 · S6-T8 · S6-T9 | `AgentMessage` bus with trace ids, fan-out depth cap 2, timeouts. Mothers publish and consume. Journey §13.5 (email → availability → prep → one recommendation → approve sends and books). Journey §13.3 overlap check. Arbitration v1 (protected time, dedupe into one question). Voice reads the briefing. Tests: bus round-trip, six-section briefing with empty states, conflict fixture yields one question and two pending actions. | Conflict observations arrive from Jotham (S8-T2); S6-T3 waits on journey fixtures (fifth seat) | 🟡 bus, arbitration, overlap check, voice in `phase2/S06-bus-arbitration` |
+| **B** | S5-T1 · S5-T2 · S5-T3 agent · S5-T4 · S5-T5 · S5-T7 prompt · S5-T9 | `home_mother`. Home agents re-homed (finance, health_wellness, entertainment, social_fun, travel). Family agent (calendar id from memory, imported contacts, important dates) and Personal Productivity agent. Personal Social labeled stub (BK-102). Health prompt guardrail (no diagnosis vocabulary, escalation sentence). Tests: family routing, finance has zero non-read tools, health lint blocks a diagnosis, identity separation. | Contacts from memory + `CONTACTS_CSV_PATH` until migration 009. Personal Productivity reads the shared `tasks` store (S4-T3) and carries its five tools, scoped to home | ✅ merged in PR #7 |
+| **C** | S6-T1 · S6-T2 · S6-T3 · S6-T4 · S6-T5 · S6-T8 · S6-T9 | `AgentMessage` bus with trace ids, fan-out depth cap 2, timeouts. Mothers publish and consume. Journey §13.5 (email → availability → prep → one recommendation → approve sends and books). Journey §13.3 overlap check. Arbitration v1 (protected time, dedupe into one question). Voice reads the briefing. Tests: bus round-trip, six-section briefing with empty states, conflict fixture yields one question and two pending actions. | Conflict observations arrive from Jotham (S8-T2); S6-T3 waits on journey fixtures (fifth seat) | 🟡 bus, arbitration, overlap check and voice merged in PR #8; journeys and the briefing hand-off open |
 | **D** | S7-T6 · S9-T4 · S9-T5 | Mother `read_observations` tool; observations surface only in the briefing or on "how am I doing?", never mid-task. `reading_knowledge` agent and `query_knowledge` Mother tool (§13.6). Career consumes rising topics; Research schedules briefs on them (Observe). | Needs knowledge API from Jotham and James | ⬜ |
 | **E** | S12-T2 · S12-T5 | Repetition detector (recurring `subject_hash`, approval streaks ≥ N) proposing recipes as `recommended` memory plus a pending approval showing exact condition and effect. Typed A2A messages to the Mother; external callers capped at Suggest regardless of user modes; opt-in `observation.created` subscription. | Pattern signals from Jotham | ⬜ |
 | **F** | S12-T4 · S12-T7 server side | Home recipes (household tasks, shopping list, morning audio, reminders only for Health). Onboarding defaults: every agent starts in Observe; 14-day warm-up notice. Journey fixes from the beta gate. | | ⬜ |
@@ -116,7 +114,7 @@ Owns `web/`. Wires behaviour behind the existing field UI without restyling it (
 
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|
-| **A** | S4-T8 · S2-T2 client · S10-T3 v0 · S10-T4 v0 · BK-110 | Domain colour and mode badge on agent tiles and cards (from `card_spawn.domain` / `mode`). Content-free UI event posts (focus/blur, card opens per domain, notification counts). Chat panel v0 against the chat route (multi-turn, reuses `suzy_summary`/`card_*`/`suggest`/`done`). Approvals inbox v0 against the actions route (approve/reject/edit, batch; consumes `permission_request` and `action_result`). TypeScript types generated from `FieldEvent`. | Both routes exist today | 🟡 |
+| **A** | S4-T8 · S2-T2 client · S10-T3 v0 · S10-T4 v0 · BK-110 | Domain colour and mode badge on agent tiles and cards (from `card_spawn.domain` / `mode`). Content-free UI event posts (focus/blur, card opens per domain, notification counts). Chat panel v0 against the chat route (multi-turn, reuses `suzy_summary`/`card_*`/`suggest`/`done`). Approvals inbox v0 against the actions route (approve/reject/edit, batch; consumes `permission_request` and `action_result`). TypeScript types generated from `FieldEvent`. | Both routes exist today | ✅ merged in PR #11 (types written by hand from `FieldEvent`; codegen stays BK-110) |
 | **B** | S11-T2 v0 · S5-T3 rail · S8-T5 | Memory panel v0 (known / assumed / recommended tabs; confirm, correct, forget; provenance). Family rail populated from the Family agent. Focus and notification hooks complete. | Memory route exists today | ⬜ |
 | **C** | S6-T6 card · S7-T5 feed | Briefing card with six sections (Work / Home / Learning / Wellbeing / Balance / Suggested actions) and honest "not connected" empty states. Observation feed with accept, dismiss, snooze, correct. | Needs James's briefing route and Jotham's observations API | ⬜ |
 | **D** | S9-T6 · S10-T2 skeleton | Knowledge view (topics with trend, related items and projects). TODAY layout skeleton (Appendix E) with lens toggle Both / Work / Home persisted in preferences. | Needs knowledge API | ⬜ |
@@ -170,14 +168,15 @@ These tasks currently sit inside James's and Robert's tables. When the fifth per
 
 | Item | Owner | Due |
 |---|---|---|
-| Camera channel — Gemini Live sees and hears: frames over `/ws/voice`, `ui_gesture` → swipe worlds / pause / briefing, flag `AGENTRIX_CAMERA`. Outside the S4–S12 plan; James to slot it (touches `routes/events.rs` kinds and the consent categories). | Kim | `phase2/camera-live-vision` |
+| Camera channel — Gemini Live sees and hears: frames over `/ws/voice`, `ui_gesture` → swipe worlds / pause / briefing, flag `AGENTRIX_CAMERA`. Outside the S4–S12 plan; James to slot it (touches `routes/events.rs` kinds and the consent categories). | Kim | ✅ merged in PR #14; follow-ups in PRs #16, #24, #29 and #32 |
 | ADR-005 tenancy: one deployment per person vs. multi-user with per-user MCP credentials and per-user scheduling. Today MCP children are spawned once at boot with operator-level OAuth, DND is one global flag, and each ambient agent runs one cron per process. | James | Sprint A, week 1 — **Proposed** in PR #6 (`docs/adr/005-…`), awaiting acceptance |
 | ADR-006 prerequisites: Phase 2 requires login + `DATABASE_URL`; define what the anonymous / in-memory path does (recommendation: demo only). Unify `user_id` type (existing `VARCHAR(255)` vs. `users.id UUID`). | James | Sprint A, week 1 — **Proposed** in PR #6 (`docs/adr/006-…`); `user_id` stays `TEXT` by decision |
 | Consent persistence: `InMemoryConsentService` still bound in `main.rs`. | James | Sprint A — done in PR #9 (`src/memory/consent.rs`, `GET/PUT /api/consents`) |
 | R1 validation script never run; S0–S3 marked "PO validation pending". | James (fifth seat when filled) | before Sprint A |
-| `docs/personal-ai-os.html` links to the fork branch instead of upstream `main`. | Kim | ✅ fixed in `phase2/S04-work-world` |
+| `docs/personal-ai-os.html` links to the fork branch instead of upstream `main`. | Kim | ✅ fixed in PR #5 |
 | CI triggers only on `main` and `milestone/**` pushes; add `phase2/**` and `docs/**`. | James | Sprint A — done in PR #6 |
 | `cargo run` stopped starting the server after R1 added `src/bin/load_ledger.rs` (README and CLAUDE.md still say `cargo run`). | James | Sprint A — fixed in PR #9 (`default-run`) |
+| End-to-end review of 2026-10-17: Fable sampling and honest fallbacks, sign-in and identity, CORS and the voice socket, escaping, the approval race, Postgres sessions, the Docker image, CI coverage. | James | ✅ merged in PRs #23–#28 and #30–#31 |
 
 ---
 

@@ -9,45 +9,30 @@ use crate::orchestrator::{coordinator, fallback};
 use crate::scenarios;
 use crate::state::SessionStore;
 
-pub fn pick_scenario(text: &str) -> &'static str {
+/// Scenario keywords in priority order, matched as whole words (`intake::mentions`).
+const SCENARIO_WORDS: &[(&str, &[&str])] = &[
+    ("deck", &["deck", "pitch", "presentation", "slides", "slide", "document", "report"]),
+    ("people", &["people", "team", "family", "catch me up"]),
+    ("live", &["live", "news", "happening", "market"]),
+    ("proactive", &["proactive", "background", "working on", "found"]),
+    ("morning", &["morning", "ready", "start my day"]),
+    ("week", &["week", "weekly", "summar*"]),
+    ("lisbon", &["trip", "travel", "flight", "hotel", "itinerary", "vacation", "holiday", "lisbon"]),
+];
+
+/// The Phase 1 scenario `text` names, if any. Routing asks a clarifying question on `None`.
+pub fn match_scenario(text: &str) -> Option<&'static str> {
     let t = text.to_lowercase();
-    if t.contains("deck")
-        || t.contains("pitch")
-        || t.contains("presentation")
-        || t.contains("slides")
-        || t.contains("document")
-        || t.contains("report")
-    {
-        return "deck";
-    }
-    if t.contains("people")
-        || t.contains("team")
-        || t.contains("family")
-        || t.contains("catch me up")
-    {
-        return "people";
-    }
-    if t.contains("live")
-        || t.contains("news")
-        || t.contains("happening")
-        || t.contains("market")
-    {
-        return "live";
-    }
-    if t.contains("proactive")
-        || t.contains("background")
-        || t.contains("working on")
-        || t.contains("found")
-    {
-        return "proactive";
-    }
-    if t.contains("morning") || t.contains("ready") || t.contains("start my day") {
-        return "morning";
-    }
-    if t.contains("week") || t.contains("summar") {
-        return "week";
-    }
-    "lisbon"
+    SCENARIO_WORDS
+        .iter()
+        .find(|(_, words)| crate::mother::intake::mentions(&t, words))
+        .map(|(key, _)| *key)
+}
+
+/// [`match_scenario`] for the scripted mock stream, which always plays a card set: the Lisbon
+/// tour when the text names none. Intent routing uses `match_scenario` and never this default.
+pub fn pick_scenario(text: &str) -> &'static str {
+    match_scenario(text).unwrap_or("lisbon")
 }
 
 pub fn suzy_summary(key: &str) -> &'static str {

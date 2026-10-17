@@ -84,15 +84,9 @@ pub fn structure_statement(text: &str) -> (Domain, &'static str, String, serde_j
     if let Some(task) = l.strip_prefix("to ").or_else(|| l.strip_prefix("i need to ")).or_else(|| l.strip_prefix("i have to ")) {
         let task_text = clean[clean.len() - task.len()..].trim().to_string();
         let domain = if has_work_words(&l) { Domain::Work } else { Domain::Home };
-        return (domain, "task", format!("task.{}", slug(&task_text)), serde_json::json!(task_text), Sensitivity::Normal);
+        return (domain, "task", format!("task.{}", slug(&task_text)), serde_json::json!(task_text), sensitivity_of(&l));
     }
-    let sensitivity = if l.contains("health") || l.contains("medication") || l.contains("doctor") || l.contains("sleep") {
-        Sensitivity::Health
-    } else if l.contains("salary") || l.contains("bank") || l.contains("mortgage") || l.contains("budget") {
-        Sensitivity::Financial
-    } else {
-        Sensitivity::Normal
-    };
+    let sensitivity = sensitivity_of(&l);
     let domain = if l.contains("work") || l.contains("meeting") || l.contains("boss") || l.contains("client") || l.contains("project") {
         Domain::Work
     } else if l.contains("family") || l.contains("home") || l.contains("kids") || l.contains("partner") || l.contains("wife") || l.contains("husband") {
@@ -101,6 +95,17 @@ pub fn structure_statement(text: &str) -> (Domain, &'static str, String, serde_j
         Domain::Shared
     };
     (domain, "context", format!("context.{}", slug(&clean)), serde_json::json!(clean), sensitivity)
+}
+
+/// Health and money statements are encrypted at rest and get a content-free key.
+fn sensitivity_of(l: &str) -> Sensitivity {
+    if l.contains("health") || l.contains("medication") || l.contains("doctor") || l.contains("sleep") {
+        Sensitivity::Health
+    } else if l.contains("salary") || l.contains("bank") || l.contains("mortgage") || l.contains("budget") {
+        Sensitivity::Financial
+    } else {
+        Sensitivity::Normal
+    }
 }
 
 fn has_work_words(l: &str) -> bool {
@@ -132,6 +137,16 @@ pub async fn try_handle(memory: &MemoryService, user_id: &str, session_id: &str,
             }
             let statement = if l.starts_with("remind me to ") { format!("to {rest}") } else { rest.to_string() };
             let (domain, category, key, value, sensitivity) = structure_statement(&statement);
+            let mut provenance = Provenance::new("user_statement").session(Some(session_id));
+            let key = if sensitivity.encrypted_at_rest() {
+                // Only the value is encrypted at rest; the key and provenance are stored as
+                // they are, so neither may carry the statement: the key is an HMAC of it and
+                // the raw text is not kept as a note.
+                format!("{category}.private_{}", memory.crypto().opaque_id(user_id, &statement))
+            } else {
+                provenance = provenance.note(rest);
+                key
+            };
             let item = memory
                 .remember(
                     user_id,
@@ -142,7 +157,7 @@ pub async fn try_handle(memory: &MemoryService, user_id: &str, session_id: &str,
                         value: value.clone(),
                         sensitivity,
                         source_agent: "mother",
-                        provenance: Provenance::new("user_statement").session(Some(session_id)).note(rest),
+                        provenance,
                     },
                 )
                 .await;
@@ -238,5 +253,38 @@ mod tests {
         let r = try_handle(&m, "u", "s", "forget meetings").await.unwrap();
         assert!(matches!(r, MemoryReply::Forgot(1)));
         assert!(m.read("u", Scope::MOTHER, None).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_chat_sensitive_statement_keeps_no_plaintext_at_rest() {
+        let m = MemoryService::in_memory();
+        let r = try_handle(&m, "u", "s", "Remember my medication is lisinopril 10mg").await.unwrap();
+        assert!(matches!(r, MemoryReply::Remembered { .. }));
+        let items = m.read("u", Scope::MOTHER, None).await;
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.sensitivity, Sensitivity::Health);
+        assert!(item.key.starts_with("context.private_"), "{}", item.key);
+        assert!(!item.key.contains("medication") && !item.key.contains("lisinopril"));
+        assert!(item.provenance.iter().all(|p| p.note.is_none()), "no raw statement in provenance");
+
+        // At rest: the value is ciphertext and nothing else in the row carries the statement.
+        let (value, provenance) = crate::memory::service::stored_columns(m.crypto(), item).unwrap();
+        let row = format!("{} {value} {provenance}", item.key);
+        assert!(!row.to_lowercase().contains("lisinopril") && !row.contains("medication"), "{row}");
+
+        // The user still gets it back, cited as something they said.
+        assert!(m.notes_for("u", Scope::MOTHER, 5).await[0].contains("lisinopril 10mg (you told me)"));
+        // Saying it again updates the same item; "forget" still finds it by value.
+        try_handle(&m, "u", "s", "remember my medication is lisinopril 10mg").await.unwrap();
+        assert_eq!(m.read("u", Scope::MOTHER, None).await.len(), 1);
+        assert!(matches!(try_handle(&m, "u", "s", "forget lisinopril").await, Some(MemoryReply::Forgot(1))));
+
+        // A reminder about medication is sensitive too; ordinary statements keep readable keys.
+        try_handle(&m, "u", "s", "remind me to refill my medication").await.unwrap();
+        try_handle(&m, "u", "s", "remember the office wifi is slow").await.unwrap();
+        let keys: Vec<String> = m.read("u", Scope::MOTHER, None).await.into_iter().map(|i| i.key).collect();
+        assert!(keys.iter().any(|k| k.starts_with("task.private_")), "{keys:?}");
+        assert!(keys.iter().any(|k| k == "context.the_office_wifi_is_slow"), "{keys:?}");
     }
 }

@@ -113,8 +113,12 @@ pub async fn classify(
     user_id: &str,
     session_id: &str,
     text: &str,
-    keyword_fallback: impl FnOnce(&str) -> &'static str,
+    keyword_fallback: impl FnOnce(&str) -> Option<&'static str>,
 ) -> ClassifyOutcome {
+    let keyword = |text: &str| match keyword_fallback(text) {
+        Some(key) => ClassifyOutcome::Scenario(key.into()),
+        None => ClassifyOutcome::Clarify(crate::mother::intake::CLARIFY_MESSAGE.into()),
+    };
     let prompt = format!("Classify this intent:\n\n{text}");
     crate::agents::ensure_runner_session(runner, user_id, session_id).await;
     let mut stream = match runner
@@ -130,7 +134,7 @@ pub async fn classify(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("intent router unavailable ({e}); using keyword fallback");
-            return ClassifyOutcome::Scenario(keyword_fallback(text).into());
+            return keyword(text);
         }
     };
 
@@ -141,7 +145,7 @@ pub async fn classify(
             Ok(ev) => ev,
             Err(e) => {
                 tracing::warn!("intent router stream failed ({e}); using keyword fallback");
-                return ClassifyOutcome::Scenario(keyword_fallback(text).into());
+                return keyword(text);
             }
         };
 
@@ -171,5 +175,5 @@ pub async fn classify(
         return ClassifyOutcome::Clarify(msg);
     }
 
-    ClassifyOutcome::Scenario(keyword_fallback(text).into())
+    keyword(text)
 }

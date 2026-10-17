@@ -186,6 +186,13 @@ fn tour_prompts_advance_in_order() {
 fn keyword_router_still_maps_pitch_to_deck() {
     assert_eq!(mock::pick_scenario("pitch presentation"), "deck");
     assert_eq!(mock::pick_scenario("Start my day"), "morning");
+    // Whole words: "weekend" is not "week", "deliver the olive order" is not "live".
+    assert_eq!(mock::match_scenario("Plan a weekend trip to Lisbon"), Some("lisbon"));
+    assert_eq!(mock::match_scenario("Deliver the olive order"), None);
+    assert_eq!(mock::match_scenario("Give me a weekly summary"), Some("week"));
+    // Only the scripted mock stream falls back to a card set; routing asks instead.
+    assert_eq!(mock::pick_scenario("Deliver the olive order"), "lisbon");
+    assert!(spatial_os::mother::intake::classify_offline("Deliver the olive order").clarify.is_some());
 }
 
 #[tokio::test]
@@ -786,6 +793,61 @@ async fn awp_gate_blocks_anonymous_subscribe() {
         .await
         .expect_err("anonymous subscribe should be forbidden");
     assert_eq!(err.status(), axum::http::StatusCode::FORBIDDEN);
+}
+
+/// Listing exposes subscribers' callback URLs and delete removes webhooks: both need `known`
+/// trust, like creating a subscription (BK-003).
+#[tokio::test]
+async fn awp_gate_subscription_routes_require_known_trust() {
+    use adk_awp::{EventSubscription, EventSubscriptionService};
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let (state, headers) = known_app_state();
+    let id = state
+        .event_service
+        .create(EventSubscription {
+            id: uuid::Uuid::now_v7(),
+            subscriber: "partner".into(),
+            callback_url: "https://partner.example/hook".into(),
+            event_types: vec!["ambient.done".into()],
+            secret: "s3cret-signing-key-of-at-least-32-bytes".into(),
+        })
+        .await
+        .unwrap();
+    let app = axum::Router::new()
+        .route("/awp/events/subscriptions", axum::routing::get(spatial_os::routes::awp::list_subscriptions))
+        .route("/awp/events/subscriptions/{id}", axum::routing::delete(spatial_os::routes::awp::delete_subscription))
+        .with_state(state.clone());
+    let req = |method: Method, path: String, known: bool| {
+        let mut req = Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
+        if known {
+            req.headers_mut().extend(headers.clone());
+        }
+        req
+    };
+
+    let list = app.clone().oneshot(req(Method::GET, "/awp/events/subscriptions".into(), false)).await.unwrap();
+    assert_eq!(list.status(), StatusCode::FORBIDDEN, "anonymous callers cannot enumerate callback URLs");
+    let delete = app.clone().oneshot(req(Method::DELETE, format!("/awp/events/subscriptions/{id}"), false)).await.unwrap();
+    assert_eq!(delete.status(), StatusCode::FORBIDDEN, "anonymous callers cannot delete webhooks");
+    assert_eq!(state.event_service.list().await.unwrap().len(), 1);
+
+    let list = app.clone().oneshot(req(Method::GET, "/awp/events/subscriptions".into(), true)).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = String::from_utf8(axum::body::to_bytes(list.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
+    assert!(body.contains("partner.example") && !body.contains("s3cret"), "{body}");
+    let delete = app.oneshot(req(Method::DELETE, format!("/awp/events/subscriptions/{id}"), true)).await.unwrap();
+    assert_eq!(delete.status(), StatusCode::NO_CONTENT);
+    assert!(state.event_service.list().await.unwrap().is_empty());
+
+    use adk_awp::BusinessContextLoader;
+    let ctx = BusinessContextLoader::from_file(&common::manifest_dir().join("business.toml")).unwrap().load();
+    for cap in ["list_subscriptions", "delete_subscription"] {
+        let c = ctx.capabilities.iter().find(|c| c.name == cap).unwrap_or_else(|| panic!("missing capability {cap}"));
+        assert_eq!(c.access_level, awp_types::TrustLevel::Known, "{cap}");
+    }
 }
 
 #[tokio::test]
@@ -1684,6 +1746,91 @@ async fn gate_pause_blocks_writes_and_resume_restores() {
 }
 
 #[tokio::test]
+async fn gate_memory_tools_follow_mode_pause_audit_and_ledger() {
+    let _serial = gate_lock().lock().await;
+    use spatial_os::memory::{service_handle, Scope, Sensitivity};
+    use spatial_os::permissions::{gate, Mode, PauseScope};
+    let svc = gate::services();
+    let user = adk_tool::SimpleToolContext::new("x").user_id().to_string();
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(adk_tool::SimpleToolContext::new("t"));
+    let toolset = spatial_os::agents::gemini::filtered_for_agent("money_agent", Arc::new(FakeInboxTools));
+    let tools: std::collections::HashMap<String, Arc<dyn adk_core::Tool>> =
+        toolset.tools(ctx).await.unwrap().into_iter().map(|t| (t.name().to_string(), t)).collect();
+    let (read, propose) = (&tools["read_memory"], &tools["propose_memory"]);
+    assert!(read.is_read_only());
+    assert!(!propose.is_read_only(), "propose_memory is classified write_local");
+
+    let key = format!("finance.gate_test_{}", uuid::Uuid::new_v4().simple());
+    let args = serde_json::json!({"key": key, "value": "rent-due-on-the-first", "sensitivity": "normal"});
+    let stored = || async { service_handle().read(&user, Scope::MOTHER, Some(std::slice::from_ref(&key))).await };
+
+    // money_agent runs in observe: reads pass, the proposal is denied and nothing is written.
+    svc.permissions.set_mode(&user, "money_agent", Mode::Observe).await;
+    assert!(read.execute(tool_ctx("s-mem"), serde_json::json!({})).await.unwrap()["items"].is_array());
+    let denied = propose.execute(tool_ctx("s-mem"), args.clone()).await.unwrap();
+    assert_eq!(denied["status"], "denied");
+    assert!(stored().await.is_empty(), "observe must not write memory");
+
+    // Pause blocks the write even in suggest mode.
+    svc.permissions.set_mode(&user, "money_agent", Mode::Suggest).await;
+    svc.permissions.pause(PauseScope::Home, None).await;
+    let paused = propose.execute(tool_ctx("s-mem"), args.clone()).await.unwrap();
+    svc.permissions.resume(PauseScope::Home).await;
+    assert_eq!(paused["status"], "paused");
+    assert!(stored().await.is_empty(), "pause must not write memory");
+
+    // Suggest runs it as a local write; a finance agent's proposal is encrypted at rest whatever
+    // sensitivity the model asked for.
+    let ok = propose.execute(tool_ctx("s-mem"), args).await.unwrap();
+    svc.permissions.set_mode(&user, "money_agent", Mode::Observe).await;
+    assert_eq!(ok["status"], "proposed");
+    let items = stored().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].sensitivity, Sensitivity::Financial);
+
+    // Every decision is audited and ledgered, without the key or value.
+    let decisions: Vec<String> = svc
+        .audit
+        .list(&user, 1000)
+        .await
+        .into_iter()
+        .filter(|e| e.agent_id == "money_agent" && e.tool == "propose_memory")
+        .map(|e| e.decision)
+        .collect();
+    for d in ["denied", "paused", "allowed"] {
+        assert!(decisions.iter().any(|x| x == d), "no {d} audit row: {decisions:?}");
+    }
+    svc.ledger.flush().await;
+    let calls = svc
+        .ledger
+        .query(&spatial_os::intelligence::LedgerQuery { user_id: user.clone(), kind: Some("tool_call".into()), agent_id: Some("money_agent".into()), ..Default::default() })
+        .await;
+    let writes = calls.iter().filter(|e| e.meta["tool_class"] == "write_local").count();
+    assert!(writes >= 3, "denied, paused and allowed proposals are ledgered: {writes}");
+    let ledger = serde_json::to_string(&calls).unwrap();
+    assert!(!ledger.contains("rent-due") && !ledger.contains(&key), "the ledger stays content-free");
+}
+
+#[test]
+fn gate_memory_tools_are_classified_and_unknown_builtins_rejected() {
+    use spatial_os::permissions::Effect;
+    use spatial_os::tools::allowlist::AllowlistCatalog;
+    let catalog = AllowlistCatalog::from_file(&common::manifest_dir().join("mcp_allowlists.toml")).expect("catalog");
+    for agent in ["money_agent", "brief_agent", "scout_agent", "mother"] {
+        assert_eq!(catalog.effect_for(agent, "propose_memory"), Some(Effect::WriteLocal), "{agent}");
+        assert_eq!(catalog.effect_for(agent, "read_memory"), Some(Effect::Read), "{agent}");
+    }
+    // Without the table, boot validation fails; a typo in it is a config error.
+    let bare = AllowlistCatalog::from_entries(catalog.entries().to_vec());
+    assert!(bare.validate_effects(true).is_err());
+    let typo = AllowlistCatalog::from_entries(catalog.entries().to_vec())
+        .with_builtin_effects([("propose_memroy".to_string(), Effect::WriteLocal)].into_iter().collect());
+    assert!(typo.effects_for_unknown_tools().contains(&("builtin_effects".into(), "propose_memroy".into())));
+    assert_eq!(spatial_os::memory::tools::sensitivity_floor("health_agent"), Some(spatial_os::memory::Sensitivity::Health));
+    assert_eq!(spatial_os::memory::tools::sensitivity_floor("inbox_agent"), None);
+}
+
+#[tokio::test]
 async fn permission_store_resolves_override_then_user_then_default() {
     use spatial_os::permissions::{Mode, PermissionStore};
     let store = PermissionStore::in_memory();
@@ -1778,6 +1925,72 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
     assert_eq!(json["actions"].as_array().unwrap().len(), 1);
     assert_eq!(app.oneshot(list("bogus")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+/// A restart loses nothing the agent said is waiting: open actions are read back per user (list)
+/// and per id (approve, reject, edit), edits and expiry are stored, and the claim stays atomic.
+#[tokio::test]
+async fn pending_pg_actions_survive_a_restart() {
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::{Effect, PendingActions, PendingStatus, Transition};
+
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let user = format!("u-pending-pg-{}", uuid::Uuid::new_v4());
+    let status_of = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT status FROM pending_actions WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("row")
+        }
+    };
+
+    let before = PendingActions::new(Some(pool.clone()));
+    let queue = |tool: &'static str| {
+        let before = before.clone();
+        let user = user.clone();
+        async move {
+            before
+                .create(&user, Some("s-1"), "inbox_agent", Domain::Work, tool, Effect::SendExternal, serde_json::json!({"to": "a@b"}), None)
+                .await
+        }
+    };
+    let (edited, approved, stale) = (queue("send_draft").await, queue("send_reply").await, queue("send_old").await);
+    before.edit(edited.id, serde_json::json!({"to": "c@d", "cc": "e@f"})).await.expect("still pending");
+    sqlx::query("UPDATE pending_actions SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
+        .bind(stale.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Restart: the user's open actions come back on the first list, the stale one expires.
+    let after = PendingActions::new(Some(pool.clone()));
+    let open = after.list(&user, Some(PendingStatus::Pending), None).await;
+    let ids: Vec<uuid::Uuid> = open.iter().map(|a| a.id).collect();
+    assert_eq!(ids, vec![edited.id, approved.id]);
+    assert_eq!(open[0].args, serde_json::json!({"to": "c@d", "cc": "e@f"}), "the edit was stored");
+    assert!(open[0].summary.contains("cc"));
+    assert_eq!(status_of(stale.id).await, "expired", "expiry is stored");
+
+    // Another restart, straight to approve/reject by id without a list first.
+    let again = PendingActions::new(Some(pool.clone()));
+    assert_eq!(again.get(approved.id).await.map(|a| a.user_id), Some(user.clone()));
+    assert!(matches!(again.claim(approved.id).await, Transition::Applied(_)));
+    assert_eq!(status_of(approved.id).await, "executing");
+    assert!(matches!(again.claim(approved.id).await, Transition::Conflict(ref c) if c.status == PendingStatus::Executing));
+    // Another instance reading the row while it runs cannot claim it either.
+    let stale_copy = PendingActions::new(Some(pool.clone()));
+    assert!(matches!(stale_copy.claim(approved.id).await, Transition::Conflict(ref c) if c.status == PendingStatus::Executing));
+    again.complete(approved.id, PendingStatus::Approved, Some(serde_json::json!({"ok": true}))).await.expect("completes its claim");
+    assert_eq!(status_of(approved.id).await, "approved");
+    assert!(matches!(again.resolve(edited.id, PendingStatus::Rejected, None).await, Transition::Applied(_)));
+    assert_eq!(status_of(edited.id).await, "rejected");
+    assert!(PendingActions::new(Some(pool)).list(&user, Some(PendingStatus::Pending), None).await.is_empty());
 }
 
 /// Double-clicked approvals, and an approval racing a rejection, run the tool at most once:
@@ -2157,6 +2370,67 @@ async fn memory_routes_remember_confirm_export_purge() {
     let res = send(Request::delete(format!("/api/memory?session_id={}", rec.session_id)).body(Body::empty()).unwrap()).await;
     assert_eq!(res.status(), StatusCode::OK);
     assert!(state.memory.export(&rec.user_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn memory_pg_known_rows_survive_proposals_and_unreadable_rows() {
+    use spatial_os::domain::Domain;
+    use spatial_os::memory::crypto::Crypto;
+    use spatial_os::memory::{Kind, MemoryService, NewItem, Provenance, Scope, Sensitivity};
+
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let user = format!("u-memory-pg-{}", uuid::Uuid::new_v4());
+    let new = |key: &'static str, value: &str, sensitivity| NewItem {
+        domain: Domain::Home,
+        category: "context",
+        key,
+        value: serde_json::json!(value),
+        sensitivity,
+        source_agent: "test",
+        provenance: Provenance::new("user_statement").note("raw statement"),
+    };
+    let row = |key: &'static str| {
+        let pool = pool.clone();
+        let user = user.clone();
+        async move {
+            sqlx::query_as::<_, (String, serde_json::Value, serde_json::Value)>(
+                "SELECT kind, value, provenance FROM memory_items WHERE user_id = $1 AND key = $2",
+            )
+            .bind(&user)
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .expect("row")
+        }
+    };
+
+    let first = MemoryService::new(Some(pool.clone()), Crypto::from_master("pg-test-master"));
+    first.remember(&user, new("context.city", "Nairobi", Sensitivity::Normal)).await;
+    first.remember(&user, new("context.dose", "10mg", Sensitivity::Health)).await;
+    let (_, value, provenance) = row("context.dose").await;
+    assert!(Crypto::is_encrypted(&value), "sensitive value is ciphertext at rest");
+    assert!(!provenance.to_string().contains("raw statement"), "sensitive provenance keeps no note");
+
+    // A restart with another master key cannot read the sensitive row: it is skipped (and
+    // logged), and a proposal for the same key does not replace the known row in Postgres.
+    let rotated = MemoryService::new(Some(pool.clone()), Crypto::from_master("another-master"));
+    let keys: Vec<String> = rotated.read(&user, Scope::MOTHER, None).await.into_iter().map(|i| i.key).collect();
+    assert_eq!(keys, vec!["context.city".to_string()]);
+    rotated.propose(&user, 0.9, new("context.dose", "20mg", Sensitivity::Health)).await;
+    assert_eq!(row("context.dose").await.0, "known", "an assumed write never downgrades a known row");
+
+    // The same through a normal restart: the proposal keeps the known value.
+    let fresh = MemoryService::new(Some(pool.clone()), Crypto::from_master("pg-test-master"));
+    let kept = fresh.propose(&user, 0.9, new("context.city", "Lisbon", Sensitivity::Normal)).await;
+    assert_eq!((kept.kind, kept.value.as_str()), (Kind::Known, Some("Nairobi")));
+    let (kind, value, _) = row("context.city").await;
+    assert_eq!((kind.as_str(), value.as_str()), ("known", Some("Nairobi")));
+    let dose = fresh.read(&user, Scope::MOTHER, Some(&["context.dose".to_string()])).await;
+    assert_eq!(dose[0].value, "10mg");
+    assert_eq!(fresh.purge(&user).await, 2);
 }
 
 #[tokio::test]

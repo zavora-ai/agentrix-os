@@ -480,6 +480,14 @@ async fn main() -> anyhow::Result<()> {
             get(routes::artifacts::get_legacy),
         )
         .route("/awp/events/subscribe", post(routes::awp::subscribe))
+        .route(
+            "/awp/events/subscriptions",
+            get(routes::awp::list_subscriptions),
+        )
+        .route(
+            "/awp/events/subscriptions/{id}",
+            delete(routes::awp::delete_subscription),
+        )
         .route("/awp/a2a", post(routes::intent::a2a_intent))
         .with_state(app_state)
         .merge(awp_router(awp_state))
@@ -926,11 +934,6 @@ fn awp_router(state: AwpState) -> Router {
         .route("/.well-known/awp.json", get(handlers::discovery))
         .route("/awp/manifest", get(handlers::manifest))
         .route("/awp/health", get(handlers::health))
-        .route("/awp/events/subscriptions", get(handlers::list_subscriptions))
-        .route(
-            "/awp/events/subscriptions/{id}",
-            delete(handlers::delete_subscription),
-        )
         .layer(from_fn(version_negotiation))
         .with_state(state)
 }
