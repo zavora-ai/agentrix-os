@@ -18,6 +18,10 @@
   const FRAME_MS = 1000;
   const FRAME_W = 320;
   const CONNECT_MS = 10000;
+  // A session that reached Gemini's time limit (about two minutes with video) is re-linked for
+  // the camera only if it lasted this long — a session "ending" sooner is not the cap, and
+  // re-linking it would loop.
+  const RELINK_MIN_MS = 20000;
   const SESSION_KEY = 'agentrix_session_id';
 
   let enabled = false; // a Live session can open (the server has a key Gemini has not rejected)
@@ -27,6 +31,7 @@
   let ws = null;
   let connecting = null; // Promise<boolean> until the server says `connected` (or refuses)
   let sessionId = null;
+  let sessionStartedAt = 0; // when the current session said `connected`
   let lastFailure = null; // why the last start returned false: device, session or cancelled
   let onTranscript = null; // receives the USER's words (input transcription), for the intent bar
   let playbackCtx = null;
@@ -206,6 +211,7 @@
       } catch (_) {
         return null;
       }
+      if (msg.type === 'connected') sessionStartedAt = Date.now();
       if (msg.type === 'connected' && msg.session_id) {
         sessionId = msg.session_id;
         // A page that already has a session keeps it; overwriting it here made every later
@@ -298,9 +304,22 @@
       if (msg.type === 'closed' || msg.type === 'error') {
         const ending = msg.type === 'closed' || !!msg.reason;
         if (msg.reason === 'key_rejected' || msg.reason === 'voice_unavailable') setUnavailable(msg.message);
+        // The camera is a standing input: at the time limit it re-links quietly instead of
+        // leaving Suzy blind until the user turns 📷 off and on. The mic stops with the session.
+        const relink =
+          msg.reason === 'session_limit' && ws === sock && cameraActive && liveCamera &&
+          Date.now() - sessionStartedAt >= RELINK_MIN_MS;
+        const micWas = micActive;
         if (ending) dropSocket(sock, { flush: msg.type === 'error' });
         else flushPlayback();
-        notify(msg.message || "Suzy's voice hit a problem.");
+        if (relink) {
+          if (micWas) notify("Suzy's live session reached its time limit — the camera reconnected; tap 🎤 to talk again.");
+          ensureSession({}).then((ok) => {
+            if (ok && !cameraActive) maybeCloseSession();
+          });
+        } else {
+          notify(msg.message || "Suzy's voice hit a problem.");
+        }
         emit('agentrix:voice-error', { message: msg.message, reason: msg.reason || null });
       }
       return msg.type;

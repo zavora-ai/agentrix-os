@@ -203,6 +203,7 @@ cargo test --test validate -- postgres_schema ui_session_persists pg_agent_sessi
 cargo test --test validate -- gemini_ router_agent suzy_agent                        # needs GOOGLE_API_KEY
 cargo test --test validate deck_workflow_writes_three_artifacts -- --ignored         # full E2E with MCP and Gemini
 node scripts/test-gesture-classifier.mjs                                             # camera gesture rules
+node scripts/test-live-voice.mjs                                                     # mic/camera/Live failure paths
 cargo clippy --all-targets
 ```
 
