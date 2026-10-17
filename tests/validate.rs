@@ -572,6 +572,57 @@ fn offline_app_state() -> spatial_os::state::AppState {
 }
 
 #[tokio::test]
+async fn voice_state_status_says_why_and_keeps_local_gestures() {
+    use axum::extract::State;
+
+    let state = offline_app_state();
+    let gestures = state.voice.gestures;
+    let status = |state: spatial_os::state::AppState| async move {
+        let axum::Json(s) = spatial_os::routes::voice::status(State(state)).await;
+        serde_json::to_value(s).unwrap()
+    };
+
+    let before = status(state.clone()).await;
+    assert_eq!(before["gestures"], gestures, "local gestures follow AGENTRIX_CAMERA, not the key");
+    if !state.voice.enabled {
+        assert_eq!(before["enabled"], false);
+        assert!(before["reason"].as_str().unwrap().contains("GOOGLE_API_KEY"));
+    }
+
+    // A key Gemini rejects (boot check or a live 1008 close) turns voice off with the reason;
+    // the camera button stays for local gestures.
+    state.voice.mark_unavailable("Voice is off — Gemini rejected the API key.");
+    let after = status(state.clone()).await;
+    assert_eq!(after["enabled"], false);
+    assert_eq!(after["camera"], false, "no Live camera channel without voice");
+    assert_eq!(after["gestures"], gestures);
+    if state.voice.enabled {
+        assert_eq!(after["reason"], "Voice is off — Gemini rejected the API key.");
+    }
+}
+
+#[tokio::test]
+async fn voice_state_session_belongs_to_the_signed_in_user() {
+    use spatial_os::routes::voice::resolve_ui_session;
+
+    let state = offline_app_state();
+    // Signed in without a session id: a new session for that user, not for a random one.
+    let sid = resolve_ui_session(&state, None, Some("user-a".into())).await;
+    assert_eq!(state.sessions.get(&sid).await.unwrap().user_id, "user-a");
+    // The page passes its own session: voice joins it.
+    assert_eq!(resolve_ui_session(&state, Some(&sid), Some("user-a".into())).await, sid);
+    // Someone else's session is never adopted.
+    let other = resolve_ui_session(&state, Some(&sid), Some("user-b".into())).await;
+    assert_ne!(other, sid);
+    assert_eq!(state.sessions.get(&other).await.unwrap().user_id, "user-b");
+    // Anonymous: an existing session is joined, an unknown id is replaced.
+    assert_eq!(resolve_ui_session(&state, Some(&sid), None).await, sid);
+    let fresh = resolve_ui_session(&state, Some("no-such-session"), None).await;
+    assert_ne!(fresh, "no-such-session");
+    assert!(state.sessions.get(&fresh).await.is_some());
+}
+
+#[tokio::test]
 async fn health_exposes_runtime_status() {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
