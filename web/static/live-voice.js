@@ -18,7 +18,8 @@
   const FRAME_MS = 1000;
   const FRAME_W = 320;
   const CONNECT_MS = 10000;
-  // A session that reached Gemini's time limit (about two minutes with video) is re-linked for
+  // A session that reached Gemini's time limit (documented: about ten minutes per connection, or
+  // two with video when the server does not ask for context window compression) is re-linked for
   // the camera only if it lasted this long — a session "ending" sooner is not the cap, and
   // re-linking it would loop.
   const RELINK_MIN_MS = 20000;

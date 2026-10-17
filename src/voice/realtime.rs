@@ -37,11 +37,18 @@ pub fn suzy_config(instruction: &str, voice: &str, language: Option<&str>) -> Re
     // short or accented English came back transcribed as Spanish. Written to `extra` so this
     // builds against adk-realtime with or without `RealtimeConfig::with_language`
     // (zavora-ai/adk-rust: feat/realtime-gemini-language-code reads the same key).
+    let mut extra = cfg.extra.take().unwrap_or_else(|| json!({}));
     if let Some(code) = language.map(str::trim).filter(|c| !c.is_empty()) {
-        let mut extra = cfg.extra.take().unwrap_or_else(|| json!({}));
         extra["language_code"] = json!(code);
-        cfg.extra = Some(extra);
     }
+    // Context window compression (a sliding window, server defaults). Google documents that a
+    // Live session without it ends after about two minutes with camera frames and fifteen
+    // audio-only (`gemini-3.8-live` ran 13 minutes with frames without it on 2026-10-17, so the
+    // cap is model-dependent; `GEMINI_LIVE_MODEL` can name another). Same `extra` pattern:
+    // adk-realtime without `with_context_window_compression` ignores the key
+    // (zavora-ai/adk-rust#867 reads it).
+    extra["context_window_compression"] = json!(true);
+    cfg.extra = Some(extra);
     cfg
 }
 
@@ -259,10 +266,21 @@ mod tests {
 
     #[test]
     fn suzy_config_leaves_the_language_unpinned_only_when_asked() {
-        assert!(suzy_config("x", "Aoede", None).extra.is_none());
-        assert!(suzy_config("x", "Aoede", Some("  ")).extra.is_none());
+        for unpinned in [None, Some("  ")] {
+            let extra = suzy_config("x", "Aoede", unpinned).extra.unwrap();
+            assert!(extra.get("language_code").is_none());
+        }
         let cfg = suzy_config("x", "Aoede", Some("en-GB"));
         assert_eq!(cfg.extra.unwrap()["language_code"], json!("en-GB"));
+    }
+
+    #[test]
+    fn suzy_config_asks_for_context_window_compression() {
+        // Google documents a ~2-minute cap on Live sessions with video without it.
+        for language in [None, Some("en-US")] {
+            let extra = suzy_config("x", "Aoede", language).extra.unwrap();
+            assert_eq!(extra["context_window_compression"], json!(true));
+        }
     }
 
     #[test]
