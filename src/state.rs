@@ -78,6 +78,10 @@ pub struct SessionRecord {
     /// Mother chat transcript for this session (S1-T5).
     #[serde(default)]
     pub chat_history: Vec<ChatTurn>,
+    /// Created by a signed-in user: `user_id` is their JWT subject and only they may act in the
+    /// session. `false` for anonymous sessions, which admit whoever holds the id.
+    #[serde(default)]
+    pub signed_in: bool,
 }
 
 impl SessionRecord {
@@ -92,7 +96,13 @@ impl SessionRecord {
             agents_active: Vec::new(),
             agents_resting: Vec::new(),
             chat_history: Vec::new(),
+            signed_in: false,
         }
+    }
+
+    /// Whether `caller` (the JWT subject, if any) may act in this session.
+    pub fn admits(&self, caller: Option<&str>) -> bool {
+        !self.signed_in || caller == Some(self.user_id.as_str())
     }
 }
 
@@ -137,6 +147,24 @@ impl SessionStore {
         let record = SessionRecord::new(Uuid::new_v4().to_string(), user_id);
         self.save(&record).await;
         record
+    }
+
+    /// A session owned by a signed-in user (`user_id` = JWT subject); see [`SessionRecord::admits`].
+    pub async fn create_signed_in(&self, user_id: String) -> SessionRecord {
+        let record = SessionRecord {
+            signed_in: true,
+            ..SessionRecord::new(Uuid::new_v4().to_string(), user_id)
+        };
+        self.save(&record).await;
+        record
+    }
+
+    /// A new session for `caller` (the JWT subject): bound to them when signed in, anonymous otherwise.
+    pub async fn create_for_caller(&self, caller: Option<String>) -> SessionRecord {
+        match caller {
+            Some(user_id) => self.create_signed_in(user_id).await,
+            None => self.create().await,
+        }
     }
 
     pub async fn get(&self, session_id: &str) -> Option<SessionRecord> {
@@ -322,7 +350,7 @@ impl SessionStore {
 
 async fn load_ui_session(pool: &PgPool, session_id: &str) -> anyhow::Result<Option<SessionRecord>> {
     let row = sqlx::query_as::<_, UiSessionRow>(
-        "SELECT session_id, user_id, scenario, origin_text, artifacts, cards, agents_active, agents_resting, chat_history FROM ui_sessions WHERE session_id = $1",
+        "SELECT session_id, user_id, scenario, origin_text, artifacts, cards, agents_active, agents_resting, chat_history, signed_in FROM ui_sessions WHERE session_id = $1",
     )
     .bind(session_id)
     .fetch_optional(pool)
@@ -338,6 +366,7 @@ async fn load_ui_session(pool: &PgPool, session_id: &str) -> anyhow::Result<Opti
         agents_active: serde_json::from_value(r.agents_active).unwrap_or_default(),
         agents_resting: serde_json::from_value(r.agents_resting).unwrap_or_default(),
         chat_history: serde_json::from_value(r.chat_history).unwrap_or_default(),
+        signed_in: r.signed_in,
     }))
 }
 
@@ -349,7 +378,8 @@ async fn upsert_ui_session(pool: &PgPool, record: &SessionRecord) -> anyhow::Res
     let chat_history = serde_json::to_value(&record.chat_history)?;
 
     sqlx::query(
-        "INSERT INTO ui_sessions (session_id, user_id, scenario, origin_text, artifacts, cards, agents_active, agents_resting, chat_history) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (session_id) DO UPDATE SET user_id = $2, scenario = $3, origin_text = $4, artifacts = $5, cards = $6, agents_active = $7, agents_resting = $8, chat_history = $9, updated_at = NOW()",
+        // `signed_in` is never cleared: an owner-bound session stays bound.
+        "INSERT INTO ui_sessions (session_id, user_id, scenario, origin_text, artifacts, cards, agents_active, agents_resting, chat_history, signed_in) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (session_id) DO UPDATE SET user_id = $2, scenario = $3, origin_text = $4, artifacts = $5, cards = $6, agents_active = $7, agents_resting = $8, chat_history = $9, signed_in = ui_sessions.signed_in OR $10, updated_at = NOW()",
     )
     .bind(&record.session_id)
     .bind(&record.user_id)
@@ -360,6 +390,7 @@ async fn upsert_ui_session(pool: &PgPool, record: &SessionRecord) -> anyhow::Res
     .bind(agents_active)
     .bind(agents_resting)
     .bind(chat_history)
+    .bind(record.signed_in)
     .execute(pool)
     .await?;
     Ok(())
@@ -376,6 +407,7 @@ struct UiSessionRow {
     agents_active: serde_json::Value,
     agents_resting: serde_json::Value,
     chat_history: serde_json::Value,
+    signed_in: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

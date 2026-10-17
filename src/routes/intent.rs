@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::awp_gate;
 use crate::orchestrator::dispatch::{dispatch_intent, IntentDispatch};
 use crate::orchestrator::sse_collect;
+use crate::routes::actions::caller_session;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -35,8 +36,9 @@ pub async fn submit_intent(
         return resp;
     }
 
-    let Some(record) = state.sessions.get(&session_id).await else {
-        return (StatusCode::NOT_FOUND, "session not found").into_response();
+    let record = match caller_session(&state, &headers, &session_id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
 
     dispatch_intent(IntentDispatch {

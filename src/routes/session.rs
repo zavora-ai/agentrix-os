@@ -30,8 +30,8 @@ pub async fn create_session(
 /// `POST /api/sessions` and the voice websocket, so a session opened from voice belongs to the
 /// same user as one the page creates.
 pub async fn create_ui_session(state: &AppState, user_id: Option<String>) -> crate::state::SessionRecord {
-    let user_id = user_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let record = state.sessions.create_for_user(user_id).await;
+    // Signed in: the session is bound to that user (`SessionRecord::admits`).
+    let record = state.sessions.create_for_caller(user_id).await;
 
     let _ = state
         .session_service

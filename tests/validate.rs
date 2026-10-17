@@ -639,15 +639,20 @@ async fn voice_state_session_belongs_to_the_signed_in_user() {
     let state = offline_app_state();
     // Signed in without a session id: a new session for that user, not for a random one.
     let sid = resolve_ui_session(&state, None, Some("user-a".into())).await;
-    assert_eq!(state.sessions.get(&sid).await.unwrap().user_id, "user-a");
+    let record = state.sessions.get(&sid).await.unwrap();
+    assert_eq!(record.user_id, "user-a");
+    assert!(record.signed_in, "bound to user-a like a POST /api/sessions session");
     // The page passes its own session: voice joins it.
     assert_eq!(resolve_ui_session(&state, Some(&sid), Some("user-a".into())).await, sid);
-    // Someone else's session is never adopted.
+    // Someone else's session is never adopted, by another user or by an anonymous caller.
     let other = resolve_ui_session(&state, Some(&sid), Some("user-b".into())).await;
     assert_ne!(other, sid);
     assert_eq!(state.sessions.get(&other).await.unwrap().user_id, "user-b");
-    // Anonymous: an existing session is joined, an unknown id is replaced.
-    assert_eq!(resolve_ui_session(&state, Some(&sid), None).await, sid);
+    assert_ne!(resolve_ui_session(&state, Some(&sid), None).await, sid);
+    // Anonymous: an existing anonymous session is joined, an unknown id is replaced.
+    let anon = resolve_ui_session(&state, None, None).await;
+    assert!(!state.sessions.get(&anon).await.unwrap().signed_in);
+    assert_eq!(resolve_ui_session(&state, Some(&anon), None).await, anon);
     let fresh = resolve_ui_session(&state, Some("no-such-session"), None).await;
     assert_ne!(fresh, "no-such-session");
     assert!(state.sessions.get(&fresh).await.is_some());
@@ -886,6 +891,14 @@ async fn ui_session_persists_across_store_instances() {
     .expect("ui_sessions row");
     assert_eq!(row.0, "user-validate");
     assert!(row.1.is_array());
+
+    // The owner binding survives a reload and later writes; anonymous stays anonymous.
+    assert!(!loaded.signed_in);
+    let bound = store_a.create_signed_in(uuid::Uuid::new_v4().to_string()).await;
+    store_a.set_scenario(&bound.session_id, "week", None).await;
+    let loaded = store_b.get(&bound.session_id).await.expect("signed-in session loads");
+    assert!(loaded.signed_in);
+    assert!(loaded.admits(Some(&bound.user_id)) && !loaded.admits(None));
 }
 
 #[tokio::test]
@@ -3471,4 +3484,135 @@ fn security_postgres_mode_requires_real_secrets() {
     assert!(require_secret("X", Some("   ")).is_err());
     assert!(require_secret("X", Some(&"x".repeat(31))).is_err());
     assert!(require_secret("X", Some(&"x".repeat(32))).is_ok());
+}
+
+/// A Bearer header for `user`, signed with `known_app_state`'s secret.
+fn security_bearer(user: uuid::Uuid) -> axum::http::HeaderMap {
+    let token = spatial_os::auth::create_token(user, "test-secret").expect("jwt");
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+    headers
+}
+
+/// The session-scoped routes open to anonymous callers, plus session creation.
+fn security_session_app(state: spatial_os::state::AppState) -> axum::Router {
+    use axum::routing::{get, post};
+    use spatial_os::routes;
+    axum::Router::new()
+        .route("/api/sessions", post(routes::session::create_session))
+        .route("/api/sessions/{session_id}/intent", post(routes::intent::submit_intent))
+        .route("/api/sessions/{session_id}/chat", post(routes::chat::chat).get(routes::chat::history))
+        .route("/api/sessions/{session_id}/events", post(routes::events::record))
+        .route("/api/greeting", get(routes::greeting::get_greeting))
+        .route("/ws/voice", get(routes::voice::ws_voice))
+        .with_state(state)
+}
+
+async fn security_call(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<&serde_json::Value>,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
+    use tower::ServiceExt;
+    let mut req = axum::http::Request::builder().method(method).uri(uri);
+    if body.is_some() {
+        req = req.header("content-type", "application/json");
+    }
+    let mut req = req
+        .body(body.map_or_else(axum::body::Body::empty, |b| axum::body::Body::from(b.to_string())))
+        .unwrap();
+    req.headers_mut().extend(headers.clone());
+    app.clone().oneshot(req).await.unwrap()
+}
+
+async fn security_new_session(app: &axum::Router, headers: &axum::http::HeaderMap) -> serde_json::Value {
+    let res = security_call(app, "POST", "/api/sessions", None, headers).await;
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap()
+}
+
+/// Review 2026-10-17: artifact URLs carry a signed-in user's session id, and the anonymous session
+/// routes acted as the session's owner for whoever held it (Mother read their memory, queued
+/// actions in their name, the chat transcript was readable). A session created while signed in
+/// now admits only that user; strangers and anonymous callers get 403 and nothing runs.
+#[tokio::test]
+async fn security_signed_in_session_admits_only_its_owner() {
+    use axum::http::StatusCode;
+
+    let (state, owner) = known_app_state();
+    let owner_id = known_user(&state, &owner);
+    let app = security_session_app(state.clone());
+    let created = security_new_session(&app, &owner).await;
+    assert_eq!(created["authenticated"], true);
+    assert_eq!(created["user_id"], owner_id.as_str());
+    let sid = created["session_id"].as_str().unwrap().to_string();
+    let record = state.sessions.get(&sid).await.unwrap();
+    assert!(record.signed_in);
+    assert!(record.admits(Some(&owner_id)) && !record.admits(None) && !record.admits(Some("someone-else")));
+
+    let intent = serde_json::json!({ "text": "Plan my week" });
+    let chat = serde_json::json!({ "text": "What is on today?" });
+    let events = serde_json::json!({ "events": [{ "kind": "ui_focus" }] });
+    let routes = [
+        ("POST", format!("/api/sessions/{sid}/intent"), Some(&intent)),
+        ("POST", format!("/api/sessions/{sid}/chat"), Some(&chat)),
+        ("GET", format!("/api/sessions/{sid}/chat"), None),
+        ("POST", format!("/api/sessions/{sid}/events"), Some(&events)),
+        ("GET", format!("/api/greeting?session_id={sid}"), None),
+        ("GET", format!("/ws/voice?session_id={sid}"), None),
+    ];
+
+    let ledger_before = state.ledger.count(&owner_id).await;
+    let stranger = security_bearer(uuid::Uuid::new_v4());
+    for caller in [&stranger, &axum::http::HeaderMap::new()] {
+        for (method, uri, body) in &routes {
+            let status = security_call(&app, method, uri, *body, caller).await.status();
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+    }
+    let record = state.sessions.get(&sid).await.unwrap();
+    assert!(record.chat_history.is_empty() && record.scenario.is_none(), "nothing ran in the owner's name");
+    assert_eq!(state.ledger.count(&owner_id).await, ledger_before);
+
+    for (method, uri, body) in &routes {
+        let status = security_call(&app, method, uri, *body, &owner).await.status();
+        // The voice websocket passes the owner check; this plain GET then fails the upgrade itself.
+        assert!(status.is_success() || (uri.starts_with("/ws/") && status != StatusCode::FORBIDDEN), "{method} {uri}: {status}");
+    }
+    assert!(!state.sessions.chat_history(&sid).await.is_empty(), "the owner's chat turn landed");
+}
+
+/// Sessions created without signing in (first run, the demo) keep admitting whoever holds the id,
+/// signed in or not, and records saved before the flag existed load as anonymous.
+#[tokio::test]
+async fn security_anonymous_sessions_stay_open() {
+    use axum::http::StatusCode;
+
+    let (state, signed_in) = known_app_state();
+    let app = security_session_app(state.clone());
+    let created = security_new_session(&app, &axum::http::HeaderMap::new()).await;
+    assert_eq!(created["authenticated"], false);
+    let sid = created["session_id"].as_str().unwrap().to_string();
+    let record = state.sessions.get(&sid).await.unwrap();
+    assert!(!record.signed_in && record.admits(None));
+
+    let intent = serde_json::json!({ "text": "Plan my week" });
+    let events = serde_json::json!({ "events": [{ "kind": "ui_focus" }] });
+    for caller in [&axum::http::HeaderMap::new(), &signed_in] {
+        let intent_uri = format!("/api/sessions/{sid}/intent");
+        assert_eq!(security_call(&app, "POST", &intent_uri, Some(&intent), caller).await.status(), StatusCode::OK);
+        let chat_uri = format!("/api/sessions/{sid}/chat");
+        assert_eq!(security_call(&app, "GET", &chat_uri, None, caller).await.status(), StatusCode::OK);
+        let events_uri = format!("/api/sessions/{sid}/events");
+        assert_eq!(security_call(&app, "POST", &events_uri, Some(&events), caller).await.status(), StatusCode::ACCEPTED);
+        let voice_uri = format!("/ws/voice?session_id={sid}");
+        assert_ne!(security_call(&app, "GET", &voice_uri, None, caller).await.status(), StatusCode::FORBIDDEN);
+    }
+
+    let mut old = serde_json::to_value(&record).unwrap();
+    old.as_object_mut().unwrap().remove("signed_in");
+    let old: spatial_os::state::SessionRecord = serde_json::from_value(old).unwrap();
+    assert!(!old.signed_in);
 }
