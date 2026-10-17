@@ -895,11 +895,15 @@ async fn boot_persistence(
             google_client_secret: config.google_oauth_client_secret.clone(),
             base_url: config.base_url.clone(),
             dev_login: config.dev_login_enabled(),
+            owner_emails: config.owner_emails.clone(),
         })
     });
 
     if auth_state.is_some() {
         tracing::info!("Google OAuth + JWT auth enabled");
+        if config.owner_emails.is_empty() {
+            tracing::warn!("AGENTRIX_OWNER_EMAILS unset — every sign-in is refused (ADR-005: one owner per instance)");
+        }
     }
 
     Ok((session_service, session_store, auth_state, Some(pool)))

@@ -51,6 +51,8 @@ pub struct AppConfig {
     /// `AGENTRIX_DEV_LOGIN` (default off): `POST /api/auth/dev` signs in without Google. Honoured
     /// only on a loopback `HOST` and `BASE_URL` — see [`AppConfig::dev_login_enabled`].
     pub dev_login: bool,
+    /// `AGENTRIX_OWNER_EMAILS`, comma-separated (ADR-005): the accounts allowed to sign in.
+    pub owner_emails: Vec<String>,
 }
 
 impl AppConfig {
@@ -201,6 +203,9 @@ impl AppConfig {
             dev_login: std::env::var("AGENTRIX_DEV_LOGIN")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            owner_emails: parse_owner_emails(
+                &std::env::var("AGENTRIX_OWNER_EMAILS").unwrap_or_default(),
+            ),
         })
     }
 
@@ -270,6 +275,14 @@ impl AppConfig {
     pub fn voice_enabled(&self) -> bool {
         self.google_api_key.is_some()
     }
+}
+
+/// `AGENTRIX_OWNER_EMAILS`: comma-separated, trimmed, lower-cased, blanks dropped.
+pub fn parse_owner_emails(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect()
 }
 
 /// `localhost`, `127.0.0.0/8` or `::1` (brackets allowed, as in a URL host).

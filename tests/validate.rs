@@ -2852,13 +2852,18 @@ async fn work_and_home_worlds_route_lists_both_rosters() {
 /// `AuthState` for handler tests. The pool never connects: every case here is refused before
 /// the handler touches the database.
 fn security_auth_state(dev_login: bool) -> Arc<spatial_os::auth::AuthState> {
+    security_auth_state_for(dev_login, &["owner@example.com"], None)
+}
+
+fn security_auth_state_for(dev_login: bool, owners: &[&str], google: Option<(&str, &str)>) -> Arc<spatial_os::auth::AuthState> {
     Arc::new(spatial_os::auth::AuthState {
         db: sqlx::PgPool::connect_lazy("postgres://offline@127.0.0.1:1/offline").expect("lazy pool"),
         jwt_secret: "security-test-secret-at-least-32-bytes".into(),
-        google_client_id: None,
-        google_client_secret: None,
+        google_client_id: google.map(|g| g.0.to_string()),
+        google_client_secret: google.map(|g| g.1.to_string()),
         base_url: "http://127.0.0.1:9847".into(),
         dev_login,
+        owner_emails: owners.iter().map(|o| o.to_string()).collect(),
     })
 }
 
@@ -2978,4 +2983,81 @@ async fn security_known_routes_act_as_the_jwt_user_never_the_session_owner() {
     headers.insert("cookie", format!("zo_session={victim_token}").parse().unwrap());
     headers.insert("authorization", attacker.get("authorization").unwrap().clone());
     assert_eq!(state.awp.user_id(&headers).unwrap().to_string(), victim.user_id);
+}
+
+/// ADR-005: one owner per instance. Dev sign-in refuses any other email, and everyone while the
+/// allowlist is empty; the Google callback applies the same `is_owner` check.
+#[tokio::test]
+async fn security_sign_in_is_limited_to_owner_emails() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    let state = security_auth_state_for(true, &["Owner@Example.com"], None);
+    assert!(state.is_owner("owner@example.com") && state.is_owner(" OWNER@example.com "));
+    assert!(!state.is_owner("intruder@example.com") && !state.is_owner(""));
+    assert!(!security_auth_state_for(true, &[], None).is_owner("owner@example.com"), "empty allowlist admits nobody");
+
+    for (owners, email) in [(&["owner@example.com"][..], Some("intruder@example.com")), (&[][..], None), (&[][..], Some("dev@localhost"))] {
+        let res = spatial_os::auth::dev_login(
+            State(security_auth_state_for(true, owners, None)),
+            axum::Json(spatial_os::auth::DevLoginRequest { email: email.map(str::to_string) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), axum::http::StatusCode::FORBIDDEN, "{owners:?} / {email:?}");
+        assert!(res.headers().get(axum::http::header::SET_COOKIE).is_none());
+    }
+
+    assert_eq!(
+        spatial_os::config::parse_owner_emails(" Owner@Example.com, second@example.com ,"),
+        vec!["owner@example.com", "second@example.com"]
+    );
+    assert!(spatial_os::config::parse_owner_emails("").is_empty());
+}
+
+/// Login CSRF: the redirect sets a nonce cookie and sends the same value as `state`; a callback
+/// without the matching pair is refused before the code is exchanged.
+#[tokio::test]
+async fn security_google_oauth_binds_state_to_the_browser() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = security_auth_state_for(false, &["owner@example.com"], Some(("client-id", "client-secret")));
+    let app = axum::Router::new()
+        .route("/api/auth/google", axum::routing::get(spatial_os::auth::google_redirect))
+        .route("/api/auth/google/callback", axum::routing::get(spatial_os::auth::google_callback))
+        .with_state(state);
+
+    let res = app.clone().oneshot(Request::get("/api/auth/google").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    let location = res.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let cookie = res.headers()[header::SET_COOKIE].to_str().unwrap().to_string();
+    let nonce = location.split("state=").nth(1).expect("state in the Google URL").split('&').next().unwrap().to_string();
+    assert!(nonce.len() >= 32);
+    assert!(cookie.starts_with(&format!("{}={nonce};", spatial_os::auth::OAUTH_STATE_COOKIE)), "{cookie}");
+    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax"));
+
+    let callback = |query: String, cookie: Option<String>| {
+        let app = app.clone();
+        async move {
+            let mut req = Request::get(format!("/api/auth/google/callback?{query}"));
+            if let Some(c) = cookie {
+                req = req.header(header::COOKIE, c);
+            }
+            app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap()
+        }
+    };
+    let jar = format!("{}={nonce}", spatial_os::auth::OAUTH_STATE_COOKIE);
+    for (query, cookie) in [
+        ("code=attacker-code".to_string(), Some(jar.clone())),
+        (format!("code=attacker-code&state={nonce}"), None),
+        ("code=attacker-code&state=forged".to_string(), Some(jar.clone())),
+    ] {
+        let res = callback(query.clone(), cookie).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{query}");
+        let cleared = res.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cleared.contains("Max-Age=0"));
+        assert!(!cleared.starts_with(spatial_os::auth::COOKIE_NAME), "no session cookie on a refused callback");
+    }
 }
