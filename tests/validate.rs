@@ -1440,7 +1440,7 @@ async fn gate_suggest_runs_local_writes_and_queues_external_sends() {
 
     // Approval executes the un-gated tool and audits it.
     let state = offline_app_state();
-    let resolved = spatial_os::routes::actions::approve_one(&state, &user, pending).await;
+    let resolved = spatial_os::routes::actions::approve_one(&state, &user, pending).await.expect("this approval claims the action");
     assert_eq!(resolved.status, PendingStatus::Approved);
     assert_eq!(resolved.result.as_ref().unwrap()["output"], "SENT");
     let approved = svc.audit.list(&user, 50).await.into_iter().filter(|e| e.decision == "approved" && e.approval_id == Some(id)).count();
@@ -1532,15 +1532,109 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     assert!(matches!(state.pending.get(a.id).await.unwrap().status, PendingStatus::Approved | PendingStatus::Failed));
     assert!(matches!(state.pending.get(b.id).await.unwrap().status, PendingStatus::Approved | PendingStatus::Failed));
 
-    let mut req = Request::post(format!("/api/actions/{}/reject", c.id))
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
-        .unwrap();
-    req.headers_mut().extend(headers.clone());
-    let res = app.oneshot(req).await.unwrap();
+    let reject_c = || {
+        let mut req = Request::post(format!("/api/actions/{}/reject", c.id))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
+            .unwrap();
+        req.headers_mut().extend(headers.clone());
+        req
+    };
+    let res = app.clone().oneshot(reject_c()).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(state.pending.get(c.id).await.unwrap().status, PendingStatus::Rejected);
-    assert!(state.audit.count(&rec.user_id, Some("rejected")).await >= 1);
+    let rejected = state.audit.count(&rec.user_id, Some("rejected")).await;
+    assert!(rejected >= 1);
+    // A second reject is a conflict and writes no second audit row.
+    let res = app.clone().oneshot(reject_c()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(state.audit.count(&rec.user_id, Some("rejected")).await, rejected);
+
+    // `status=all` lists every action (it used to be parsed as a status first and rejected).
+    let list = |status: &str| {
+        let mut req = Request::get(format!("/api/actions?status={status}&session_id={}", rec.session_id)).body(Body::empty()).unwrap();
+        req.headers_mut().extend(headers.clone());
+        req
+    };
+    let res = app.clone().oneshot(list("all")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["actions"].as_array().unwrap().len(), 3);
+    let res = app.clone().oneshot(list("rejected")).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(app.oneshot(list("bogus")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+/// Double-clicked approvals, and an approval racing a rejection, run the tool at most once:
+/// the action is claimed (pending → executing) atomically and only the claimant executes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_actions_approve_runs_once_under_races() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::{Effect, PendingStatus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = runs.clone();
+    let tool = adk_tool::FunctionTool::new("race_send", "send", move |_c, _a| {
+        let counter = counter.clone();
+        async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok(serde_json::json!({"output": "SENT"}))
+        }
+    });
+    spatial_os::permissions::gate::services().registry.register("race_agent", Arc::new(tool)).await;
+
+    let (state, headers) = known_app_state();
+    let rec = state.sessions.create_for_user("u-race".into()).await;
+    let app = axum::Router::new()
+        .route("/api/actions/{id}/approve", axum::routing::post(spatial_os::routes::actions::approve))
+        .route("/api/actions/{id}/reject", axum::routing::post(spatial_os::routes::actions::reject))
+        .with_state(state.clone());
+    let post = |id: uuid::Uuid, verb: &str| {
+        let mut req = Request::post(format!("/api/actions/{id}/{verb}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"session_id": rec.session_id}).to_string()))
+            .unwrap();
+        req.headers_mut().extend(headers.clone());
+        app.clone().oneshot(req)
+    };
+
+    // Two approves (a double-click) and a reject, all at once.
+    let a = state.pending.create(&rec.user_id, Some(&rec.session_id), "race_agent", Domain::Work, "race_send", Effect::SendExternal, serde_json::json!({}), None).await;
+    let (x, y, z) = tokio::join!(post(a.id, "approve"), post(a.id, "approve"), post(a.id, "reject"));
+    let codes = [x.unwrap().status(), y.unwrap().status(), z.unwrap().status()];
+    assert_eq!(codes.iter().filter(|c| **c == StatusCode::OK).count(), 1, "exactly one decision wins: {codes:?}");
+    assert_eq!(codes.iter().filter(|c| **c == StatusCode::CONFLICT).count(), 2, "the others conflict: {codes:?}");
+    let status = state.pending.get(a.id).await.unwrap().status;
+    let expected_runs = usize::from(status == PendingStatus::Approved);
+    assert!(matches!(status, PendingStatus::Approved | PendingStatus::Rejected), "{status:?}");
+    assert_eq!(runs.load(Ordering::SeqCst), expected_runs, "the tool ran once only if an approval won");
+
+    // Many concurrent approvals of one action through `approve_one`: one execution.
+    let before = runs.load(Ordering::SeqCst);
+    let b = state.pending.create(&rec.user_id, Some(&rec.session_id), "race_agent", Domain::Work, "race_send", Effect::SendExternal, serde_json::json!({}), None).await;
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let (state, user, b) = (state.clone(), rec.user_id.clone(), b.clone());
+            tokio::spawn(async move { spatial_os::routes::actions::approve_one(&state, &user, b).await })
+        })
+        .collect();
+    let mut won = 0;
+    for h in handles {
+        if h.await.unwrap().is_ok() {
+            won += 1;
+        }
+    }
+    assert_eq!(won, 1);
+    assert_eq!(runs.load(Ordering::SeqCst), before + 1);
+    assert_eq!(state.pending.get(b.id).await.unwrap().status, PendingStatus::Approved);
+    let approvals = state.audit.list(&rec.user_id, 50).await.into_iter().filter(|e| e.approval_id == Some(b.id)).count();
+    assert_eq!(approvals, 1, "one audit row per executed approval");
 }
 
 #[tokio::test]

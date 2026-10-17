@@ -78,6 +78,7 @@ Owns migrations, stores, routes, the SSE enum, the manifest and the allowlist fi
 | `012_knowledge.sql` | `reading_items`, `knowledge_nodes`, `knowledge_edges` | S9-T2 | D |
 | `013_retention.sql` | `retention_policies` | S11-T5 | D |
 | `014_recipes.sql` | `automation_recipes` | S12-T1 | E |
+| `015_pending_actions_executing.sql` | `pending_actions` status `executing` (approvals run once) | review fix | — |
 
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|

@@ -11,7 +11,7 @@ pub mod store;
 
 pub use audit::{AuditEntry, AuditLog};
 pub use gate::{execute_approved, PermissionGate, PermissionServices, ToolRegistry};
-pub use pending::{PendingAction, PendingActions, PendingEvent, PendingStatus};
+pub use pending::{PendingAction, PendingActions, PendingEvent, PendingStatus, Transition};
 pub use store::{AgentPermission, AgentPermissionView, PauseScope, PermissionStore};
 
 use serde::{Deserialize, Serialize};

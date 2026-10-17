@@ -52,14 +52,14 @@ access_level = "anonymous"
 
 [[capabilities]]
 name = "list_actions"
-description = "Pending actions awaiting approval (and GET /api/audit — the audit log of executed, queued and denied effects)"
+description = "Pending actions awaiting approval (?status=pending by default, any status, or all; and GET /api/audit — the audit log of executed, queued and denied effects)"
 endpoint = "/api/actions"
 method = "GET"
 access_level = "known"
 
 [[capabilities]]
 name = "approve_action"
-description = "Approve, reject or edit a pending action (POST /api/actions/{id}/approve|reject|edit; POST /api/actions/approve for a batch). Approval executes the tool with the user as the authority and writes an audit row"
+description = "Approve, reject or edit a pending action (POST /api/actions/{id}/approve|reject|edit; POST /api/actions/approve for a batch). Approval executes the tool once, with the user as the authority, and writes an audit row; an action already claimed, resolved or expired answers 409"
 endpoint = "/api/actions/{action_id}/approve"
 method = "POST"
 access_level = "known"
