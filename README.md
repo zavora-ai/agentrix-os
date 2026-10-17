@@ -147,9 +147,12 @@ Every setting is an environment variable, read in `src/config.rs` and documented
 | `GEMINI_LIVE_MODEL`, `VOICE_NAME` | Live voice model and voice | `models/gemini-3.8-live`, `Aoede` |
 | `AGENTRIX_CAMERA` | Camera channel over the voice socket | `1` |
 | `MCP_*_PATH` | Binaries for worksheet, docx, slides, calendar, email, news, weather, market data, Slack, CRM, banking, GitHub, maps, real estate | `../mcp-servers/<crate>/target/release/<bin>` |
-| `DATABASE_URL`, `JWT_SECRET` | Postgres persistence and sign-in; both required for a real deployment | unset |
-| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Sign in with Google; without them, use the dev sign-in | unset |
-| `MEMORY_MASTER_KEY`, `LEDGER_HASH_KEY` | Encrypt sensitive memory values; hash ledger subjects | dev keys, with a boot warning |
+| `DATABASE_URL`, `JWT_SECRET` | Postgres persistence and sign-in; both required for a real deployment. `JWT_SECRET` must be at least 32 bytes | unset |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Sign in with Google | unset |
+| `AGENTRIX_OWNER_EMAILS` | The instance owner(s), comma-separated ([ADR-005](docs/adr/005-tenancy-one-instance-per-person.md)); Google and dev sign-in refuse every other account, and everyone while it is empty | unset |
+| `AGENTRIX_DEV_LOGIN` | Password-less dev sign-in (`POST /api/auth/dev`) when Google is not configured; honoured only on a loopback `HOST` and `BASE_URL` | off |
+| `CORS_ALLOWED_ORIGINS` | Extra browser origins allowed to call the API with credentials, and to open `/ws/voice` | unset (same origin only) |
+| `MEMORY_MASTER_KEY`, `LEDGER_HASH_KEY` | Encrypt sensitive memory values; hash ledger subjects. Required (32+ bytes) with `DATABASE_URL`: boot refuses without them | dev keys without Postgres only |
 | `AGENTRIX_WORK_MOTHER`, `AGENTRIX_HOME_MOTHER` | `0` falls back to direct per-agent fan-out | on |
 | `AGENTRIX_ALLOW_DEMO`, `BASE_URL`, `AGENTRIX_SIGNUP_ENDPOINT` | Demo mode off localhost, public URL, early-access form | see `.env.example` |
 

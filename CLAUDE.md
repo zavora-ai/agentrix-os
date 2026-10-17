@@ -55,7 +55,7 @@ cargo test --test validate -- \
   background_cards ambient_store tour_prompts proactive_mock mcp_allowlist health_exposes \
   people_rail_unavailable commit_creates \
   domain_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_ \
-  consent_ tasks_ s7_ \
+  consent_ tasks_ s7_ security_ \
   work_agents work_stub_agents work_and_home_worlds home_agents bus_carries arbitration_
   # ^ CI's offline list; consent_pg_*, tasks_pg_* and s7_store_* skip their Postgres part
   #   unless DATABASE_URL answers (in CI, where CI is set, an unreachable database fails them)

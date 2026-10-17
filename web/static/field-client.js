@@ -333,7 +333,8 @@
                 'click',
                 (e) => {
                   e.stopPropagation();
-                  window.open(ev.resolve.artifact_url, '_blank');
+                  const url = window.AgentrixHtml.safeUrl(ev.resolve.artifact_url);
+                  if (url !== '#') window.open(url, '_blank');
                 },
                 { once: true }
               );

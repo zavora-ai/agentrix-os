@@ -42,6 +42,10 @@ pub struct AppConfig {
     pub voice_language: Option<String>,
     pub database_url: Option<String>,
     pub jwt_secret: Option<String>,
+    /// `LEDGER_HASH_KEY`: HMAC key for ledger subject hashes. Required with `DATABASE_URL`.
+    pub ledger_hash_key: Option<String>,
+    /// `MEMORY_MASTER_KEY`: wraps the per-user memory keys. Required with `DATABASE_URL`.
+    pub memory_master_key: Option<String>,
     pub google_oauth_client_id: Option<String>,
     pub google_oauth_client_secret: Option<String>,
     pub base_url: String,
@@ -51,6 +55,14 @@ pub struct AppConfig {
     pub allow_demo_mode: bool,
     /// `AGENTRIX_CAMERA` (default on): camera frames over the voice websocket when voice is enabled.
     pub camera_enabled: bool,
+    /// `AGENTRIX_DEV_LOGIN` (default off): `POST /api/auth/dev` signs in without Google. Honoured
+    /// only on a loopback `HOST` and `BASE_URL` — see [`AppConfig::dev_login_enabled`].
+    pub dev_login: bool,
+    /// `AGENTRIX_OWNER_EMAILS`, comma-separated (ADR-005): the accounts allowed to sign in.
+    pub owner_emails: Vec<String>,
+    /// `CORS_ALLOWED_ORIGINS`, comma-separated: other browser origins allowed to call the API
+    /// with credentials. Empty (the default) = same-origin only.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl AppConfig {
@@ -177,6 +189,8 @@ impl AppConfig {
             },
             database_url: std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty()),
             jwt_secret: std::env::var("JWT_SECRET").ok().filter(|s| !s.is_empty()),
+            ledger_hash_key: std::env::var("LEDGER_HASH_KEY").ok().filter(|s| !s.is_empty()),
+            memory_master_key: std::env::var("MEMORY_MASTER_KEY").ok().filter(|s| !s.is_empty()),
             google_oauth_client_id: std::env::var("GOOGLE_OAUTH_CLIENT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -204,7 +218,46 @@ impl AppConfig {
             camera_enabled: std::env::var("AGENTRIX_CAMERA")
                 .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
                 .unwrap_or(true),
+            dev_login: std::env::var("AGENTRIX_DEV_LOGIN")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
+            owner_emails: parse_owner_emails(
+                &std::env::var("AGENTRIX_OWNER_EMAILS").unwrap_or_default(),
+            ),
+            cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|o| !o.trim().is_empty())
+                .filter_map(|o| {
+                    let origin = origin_of(o.trim());
+                    if origin.is_none() {
+                        tracing::warn!(origin = o.trim(), "CORS_ALLOWED_ORIGINS entry ignored — not a URL origin");
+                    }
+                    origin
+                })
+                .collect(),
         })
+    }
+
+    /// Dev sign-in issues a JWT for whatever email it is given, so it needs the explicit opt-in
+    /// and a server that is only reachable from this machine (bind address and public URL).
+    pub fn dev_login_enabled(&self) -> bool {
+        if !self.dev_login {
+            return false;
+        }
+        let base_host = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default();
+        let local = is_loopback_host(&self.host) && is_loopback_host(&base_host);
+        if !local {
+            tracing::warn!(
+                host = %self.host,
+                base_url = %self.base_url,
+                "AGENTRIX_DEV_LOGIN ignored — dev sign-in is only served on a loopback HOST and BASE_URL"
+            );
+        }
+        local
     }
 
     /// Host portion for AWP discovery (`business.toml` domain override).
@@ -217,6 +270,30 @@ impl AppConfig {
             return rest.split('/').next().unwrap_or(rest).to_string();
         }
         format!("{}:{}", self.host, self.port)
+    }
+
+    /// Browser origins trusted with credentials: this server's own (`BASE_URL`) and
+    /// `CORS_ALLOWED_ORIGINS`. The `/ws/voice` Origin check uses this list.
+    pub fn trusted_origins(&self) -> Vec<String> {
+        origin_of(&self.base_url)
+            .into_iter()
+            .chain(self.cors_allowed_origins.iter().cloned())
+            .collect()
+    }
+
+    /// Refuse to boot on secrets that would protect real data with public values: a `JWT_SECRET`
+    /// shorter than [`MIN_SECRET_BYTES`] (anyone could mint Known tokens), and in Postgres mode a
+    /// missing or weak `LEDGER_HASH_KEY` / `MEMORY_MASTER_KEY` (the dev fallbacks are in the source).
+    /// Without `DATABASE_URL` nothing persists, so the dev fallbacks stay for offline and demo boot.
+    pub fn check_secrets(&self) -> Result<()> {
+        if self.jwt_secret.is_some() {
+            require_secret("JWT_SECRET", self.jwt_secret.as_deref())?;
+        }
+        if self.database_url.is_some() {
+            require_secret("LEDGER_HASH_KEY", self.ledger_hash_key.as_deref())?;
+            require_secret("MEMORY_MASTER_KEY", self.memory_master_key.as_deref())?;
+        }
+        Ok(())
     }
 
     pub fn postgres_enabled(&self) -> bool {
@@ -252,6 +329,76 @@ impl AppConfig {
     pub fn voice_enabled(&self) -> bool {
         self.google_api_key.is_some()
     }
+}
+
+/// Shortest accepted secret: 256 bits, the HMAC-SHA256 / AES-256 key size.
+pub const MIN_SECRET_BYTES: usize = 32;
+
+/// A secret that guards persisted data: set, at least [`MIN_SECRET_BYTES`] long, and not one of
+/// the `change-me…` placeholders from `.env.example`.
+pub fn require_secret(name: &str, value: Option<&str>) -> Result<()> {
+    const HOW: &str = "generate one with `openssl rand -base64 48`";
+    match value.map(str::trim) {
+        None | Some("") => anyhow::bail!("{name} must be set when DATABASE_URL is — {HOW}"),
+        Some(v) if v.starts_with("change-me") => {
+            anyhow::bail!("{name} is still the .env.example placeholder — {HOW}")
+        }
+        Some(v) if v.len() < MIN_SECRET_BYTES => {
+            anyhow::bail!("{name} must be at least {MIN_SECRET_BYTES} bytes — {HOW}")
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// `AGENTRIX_OWNER_EMAILS`: comma-separated, trimmed, lower-cased, blanks dropped.
+pub fn parse_owner_emails(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect()
+}
+
+/// `scheme://host[:port]` — the form browsers send in `Origin` — or `None` for a non-URL.
+pub fn origin_of(url: &str) -> Option<String> {
+    let origin = reqwest::Url::parse(url).ok()?.origin().ascii_serialization();
+    (origin != "null").then_some(origin)
+}
+
+/// Whether a browser `Origin` is one of `trusted` (from [`AppConfig::trusted_origins`]). A
+/// loopback origin also matches a loopback or unspecified (`0.0.0.0`) trusted one on the same
+/// scheme and port: `localhost` and `127.0.0.1` are the same machine, a rebound DNS name is not.
+pub fn origin_allowed(origin: &str, trusted: &[String]) -> bool {
+    let Ok(o) = reqwest::Url::parse(origin) else {
+        return false;
+    };
+    let normalized = o.origin().ascii_serialization();
+    let local = |host: Option<&str>, or_unspecified: bool| {
+        host.is_some_and(|h| {
+            is_loopback_host(h)
+                || (or_unspecified
+                    && h.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_unspecified()))
+        })
+    };
+    trusted.iter().any(|t| {
+        if *t == normalized {
+            return true;
+        }
+        reqwest::Url::parse(t).is_ok_and(|t| {
+            t.scheme() == o.scheme()
+                && t.port_or_known_default() == o.port_or_known_default()
+                && local(t.host_str(), true)
+                && local(o.host_str(), false)
+        })
+    })
+}
+
+/// `localhost`, `127.0.0.0/8` or `::1` (brackets allowed, as in a URL host).
+pub fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// `env_key` (or `default` when unset); relative paths resolve against the root.

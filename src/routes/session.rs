@@ -3,7 +3,6 @@ use serde::Serialize;
 
 use adk_session::CreateRequest;
 
-use crate::auth;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -17,10 +16,7 @@ pub async fn create_session(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Json<SessionResponse> {
-    let authenticated_user = state
-        .auth
-        .as_ref()
-        .and_then(|a| auth::extract_user_id(&headers, &a.jwt_secret));
+    let authenticated_user = state.awp.user_id(&headers);
     let record = create_ui_session(&state, authenticated_user.map(|u| u.to_string())).await;
 
     Json(SessionResponse {
@@ -29,6 +25,7 @@ pub async fn create_session(
         authenticated: authenticated_user.is_some(),
     })
 }
+
 /// A new UI session for the signed-in user, or for a fresh anonymous id. Shared by
 /// `POST /api/sessions` and the voice websocket, so a session opened from voice belongs to the
 /// same user as one the page creates.

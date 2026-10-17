@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::events::sse::{to_event, ConductStep, FieldEvent};
+use crate::routes::actions::owned_session;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -39,9 +40,9 @@ pub async fn fuse_cards(
         return resp;
     }
 
-    let Some(_record) = state.sessions.get(&session_id).await else {
-        return (StatusCode::NOT_FOUND, "session not found").into_response();
-    };
+    if let Err(resp) = owned_session(&state, &headers, &session_id).await {
+        return resp;
+    }
 
     let (tx, rx) = mpsc::channel::<Result<axum::response::sse::Event, Infallible>>(8);
     let source = body.source;

@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    http::HeaderMap,
+    response::Response,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::Domain;
 use crate::intelligence::ledger::ActivityEvent;
 use crate::permissions::{AuditEntry, Effect, PendingStatus};
+use crate::routes::actions::owned_session;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -57,9 +58,7 @@ pub async fn commit_action(
         .await
         .map_err(|r| r)?;
 
-    let Some(record) = state.sessions.get(&session_id).await else {
-        return Err(StatusCode::NOT_FOUND.into_response());
-    };
+    let record = owned_session(&state, &headers, &session_id).await?;
 
     let scenario = record.scenario.as_deref().unwrap_or("").to_string();
     let card = record

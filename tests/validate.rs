@@ -1629,7 +1629,7 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-actions".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let a = state.pending.create(&rec.user_id, Some(&rec.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
     let b = state.pending.create(&rec.user_id, Some(&rec.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
     let c = state.pending.create(&rec.user_id, Some(&rec.session_id), "calendar_agent", Domain::Work, "create_event", Effect::ScheduleWithOthers, serde_json::json!({}), None).await;
@@ -1721,7 +1721,7 @@ async fn pending_actions_approve_runs_once_under_races() {
     spatial_os::permissions::gate::services().registry.register("race_agent", Arc::new(tool)).await;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-race".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route("/api/actions/{id}/approve", axum::routing::post(spatial_os::routes::actions::approve))
         .route("/api/actions/{id}/reject", axum::routing::post(spatial_os::routes::actions::reject))
@@ -1778,7 +1778,7 @@ async fn permission_routes_set_mode_and_pause() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-perms".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route("/api/permissions", axum::routing::get(spatial_os::routes::permissions::get).put(spatial_os::routes::permissions::put))
         .route("/api/pause", axum::routing::post(spatial_os::routes::permissions::pause))
@@ -1861,7 +1861,7 @@ async fn commit_creates_an_approved_action_with_audit() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-commit".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     state.sessions.set_scenario(&rec.session_id, "morning", Some("Start my day")).await;
     state.sessions.upsert_card(&rec.session_id, 1, serde_json::json!({"title":"Needs you","agent":"inbox.agent"}), "resolved", None, false).await;
     let app = axum::Router::new()
@@ -1911,6 +1911,11 @@ fn known_app_state() -> (spatial_os::state::AppState, axum::http::HeaderMap) {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
     (state, headers)
+}
+
+/// The JWT subject behind `known_app_state`'s headers — the only user its routes act as.
+fn known_user(state: &spatial_os::state::AppState, headers: &axum::http::HeaderMap) -> String {
+    state.awp.user_id(headers).expect("known headers carry a valid JWT").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -2021,7 +2026,7 @@ async fn memory_routes_remember_confirm_export_purge() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-memory-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route("/api/memory", axum::routing::get(spatial_os::routes::memory::list).post(spatial_os::routes::memory::remember).delete(spatial_os::routes::memory::purge))
         .route("/api/memory/export", axum::routing::get(spatial_os::routes::memory::export))
@@ -2176,7 +2181,7 @@ async fn consent_routes_get_and_put_require_known_trust() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-consent-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let app = axum::Router::new()
         .route(
             "/api/consents",
@@ -2481,7 +2486,7 @@ async fn tasks_route_lists_open_tasks_for_known_user() {
     use tower::ServiceExt;
 
     let (state, headers) = known_app_state();
-    let rec = state.sessions.create_for_user("u-tasks-routes".into()).await;
+    let rec = state.sessions.create_for_user(known_user(&state, &headers)).await;
     let work = state
         .tasks
         .create(
@@ -3100,4 +3105,370 @@ async fn work_and_home_worlds_route_lists_both_rosters() {
     let ctx = BusinessContextLoader::from_file(&common::manifest_dir().join("business.toml")).unwrap().load();
     let cap = ctx.capabilities.iter().find(|c| c.name == "get_worlds").expect("get_worlds capability");
     assert_eq!(cap.access_level, awp_types::TrustLevel::Anonymous);
+}
+
+// ---------------------------------------------------------------------------
+// Security — sign-in, identity, transport and secrets (review 2026-10-17)
+// ---------------------------------------------------------------------------
+
+/// `AuthState` for handler tests. The pool never connects: every case here is refused before
+/// the handler touches the database.
+fn security_auth_state(dev_login: bool) -> Arc<spatial_os::auth::AuthState> {
+    security_auth_state_for(dev_login, &["owner@example.com"], None)
+}
+
+fn security_auth_state_for(dev_login: bool, owners: &[&str], google: Option<(&str, &str)>) -> Arc<spatial_os::auth::AuthState> {
+    Arc::new(spatial_os::auth::AuthState {
+        db: sqlx::PgPool::connect_lazy("postgres://offline@127.0.0.1:1/offline").expect("lazy pool"),
+        jwt_secret: "security-test-secret-at-least-32-bytes".into(),
+        google_client_id: google.map(|g| g.0.to_string()),
+        google_client_secret: google.map(|g| g.1.to_string()),
+        base_url: "http://127.0.0.1:9847".into(),
+        dev_login,
+        owner_emails: owners.iter().map(|o| o.to_string()).collect(),
+    })
+}
+
+#[tokio::test]
+async fn security_dev_login_needs_explicit_opt_in() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    let res = spatial_os::auth::dev_login(
+        State(security_auth_state(false)),
+        axum::Json(spatial_os::auth::DevLoginRequest { email: Some("victim@example.com".into()) }),
+    )
+    .await
+    .into_response();
+    assert_eq!(res.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(res.headers().get(axum::http::header::SET_COOKIE).is_none(), "no session cookie without the opt-in");
+
+    let providers = spatial_os::auth::providers(State(security_auth_state(false))).await;
+    assert!(!providers.0.dev, "the UI must not offer dev sign-in when it is off");
+    let providers = spatial_os::auth::providers(State(security_auth_state(true))).await;
+    assert!(providers.0.dev);
+}
+
+#[test]
+fn security_dev_login_only_on_loopback() {
+    use spatial_os::config::is_loopback_host;
+
+    for h in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.1.1"] {
+        assert!(is_loopback_host(h), "{h} is loopback");
+    }
+    for h in ["0.0.0.0", "192.168.1.10", "os.zavora.example", "", "localhost.evil.example"] {
+        assert!(!is_loopback_host(h), "{h} is not loopback");
+    }
+
+    common::load_env();
+    let mut config = AppConfig::from_env().expect("config");
+    config.host = "127.0.0.1".into();
+    config.base_url = "http://localhost:9847".into();
+    config.dev_login = false;
+    assert!(!config.dev_login_enabled(), "off by default");
+    config.dev_login = true;
+    assert!(config.dev_login_enabled());
+    config.host = "0.0.0.0".into();
+    assert!(!config.dev_login_enabled(), "refused on a public bind address");
+    config.host = "127.0.0.1".into();
+    config.base_url = "https://os.zavora.example".into();
+    assert!(!config.dev_login_enabled(), "refused behind a public URL (reverse proxy)");
+}
+
+/// Review 2026-10-17: a bogus `zo_session` cookie plus the attacker's own valid Bearer token used
+/// to earn Known trust while identity fell back to the owner of the caller-supplied `session_id`.
+#[tokio::test]
+async fn security_known_routes_act_as_the_jwt_user_never_the_session_owner() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::Effect;
+    use tower::ServiceExt;
+
+    let (state, attacker) = known_app_state();
+    let mut attacker = attacker;
+    attacker.insert("cookie", "zo_session=not-a-jwt".parse().unwrap());
+    let attacker_id = known_user(&state, &attacker);
+
+    // The cookie is checked first, then Bearer: both the gate and the routes see the attacker.
+    let victim_token = spatial_os::auth::create_token(uuid::Uuid::new_v4(), "test-secret").unwrap();
+    let victim = state.sessions.create_for_user(spatial_os::auth::verify_token(&victim_token, "test-secret").unwrap().to_string()).await;
+    let pending = state.pending.create(&victim.user_id, Some(&victim.session_id), "inbox_agent", Domain::Work, "send_anything", Effect::SendExternal, serde_json::json!({}), None).await;
+
+    let app = axum::Router::new()
+        .route("/api/actions", axum::routing::get(spatial_os::routes::actions::list))
+        .route("/api/actions/{id}/approve", axum::routing::post(spatial_os::routes::actions::approve))
+        .route("/api/memory", axum::routing::get(spatial_os::routes::memory::list))
+        .route("/api/sessions/{session_id}/cards", axum::routing::get(spatial_os::routes::cards::list_cards))
+        .route("/api/sessions/{session_id}/commit", axum::routing::post(spatial_os::routes::commit::commit_action))
+        .with_state(state.clone());
+    let send = |req: Request<Body>| {
+        let app = app.clone();
+        let mut req = req;
+        req.headers_mut().extend(attacker.clone());
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+
+    let sid = &victim.session_id;
+    assert_eq!(send(Request::get(format!("/api/actions?session_id={sid}")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    assert_eq!(send(Request::get(format!("/api/memory?session_id={sid}")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    assert_eq!(send(Request::get(format!("/api/sessions/{sid}/cards")).body(Body::empty()).unwrap()).await, StatusCode::FORBIDDEN);
+    let commit = Request::post(format!("/api/sessions/{sid}/commit"))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"card_title":"x","action_label":"Send"}"#))
+        .unwrap();
+    assert_eq!(send(commit).await, StatusCode::FORBIDDEN);
+    let approve = Request::post(format!("/api/actions/{}/approve", pending.id))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::json!({ "session_id": sid }).to_string()))
+        .unwrap();
+    assert_eq!(send(approve).await, StatusCode::FORBIDDEN);
+    assert_eq!(state.pending.get(pending.id).await.unwrap().status, spatial_os::permissions::PendingStatus::Pending);
+
+    // Without a session id the attacker only ever sees their own (empty) queue.
+    let res = app
+        .clone()
+        .oneshot({
+            let mut req = Request::get("/api/actions").body(Body::empty()).unwrap();
+            req.headers_mut().extend(attacker.clone());
+            req
+        })
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["user_id"], attacker_id.as_str());
+    assert!(json["actions"].as_array().unwrap().is_empty());
+
+    // A valid cookie wins over a Bearer token for someone else, in trust and identity alike.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("cookie", format!("zo_session={victim_token}").parse().unwrap());
+    headers.insert("authorization", attacker.get("authorization").unwrap().clone());
+    assert_eq!(state.awp.user_id(&headers).unwrap().to_string(), victim.user_id);
+}
+
+/// ADR-005: one owner per instance. Dev sign-in refuses any other email, and everyone while the
+/// allowlist is empty; the Google callback applies the same `is_owner` check.
+#[tokio::test]
+async fn security_sign_in_is_limited_to_owner_emails() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    let state = security_auth_state_for(true, &["Owner@Example.com"], None);
+    assert!(state.is_owner("owner@example.com") && state.is_owner(" OWNER@example.com "));
+    assert!(!state.is_owner("intruder@example.com") && !state.is_owner(""));
+    assert!(!security_auth_state_for(true, &[], None).is_owner("owner@example.com"), "empty allowlist admits nobody");
+
+    for (owners, email) in [(&["owner@example.com"][..], Some("intruder@example.com")), (&[][..], None), (&[][..], Some("dev@localhost"))] {
+        let res = spatial_os::auth::dev_login(
+            State(security_auth_state_for(true, owners, None)),
+            axum::Json(spatial_os::auth::DevLoginRequest { email: email.map(str::to_string) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), axum::http::StatusCode::FORBIDDEN, "{owners:?} / {email:?}");
+        assert!(res.headers().get(axum::http::header::SET_COOKIE).is_none());
+    }
+
+    assert_eq!(
+        spatial_os::config::parse_owner_emails(" Owner@Example.com, second@example.com ,"),
+        vec!["owner@example.com", "second@example.com"]
+    );
+    assert!(spatial_os::config::parse_owner_emails("").is_empty());
+}
+
+/// Login CSRF: the redirect sets a nonce cookie and sends the same value as `state`; a callback
+/// without the matching pair is refused before the code is exchanged.
+#[tokio::test]
+async fn security_google_oauth_binds_state_to_the_browser() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = security_auth_state_for(false, &["owner@example.com"], Some(("client-id", "client-secret")));
+    let app = axum::Router::new()
+        .route("/api/auth/google", axum::routing::get(spatial_os::auth::google_redirect))
+        .route("/api/auth/google/callback", axum::routing::get(spatial_os::auth::google_callback))
+        .with_state(state);
+
+    let res = app.clone().oneshot(Request::get("/api/auth/google").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    let location = res.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let cookie = res.headers()[header::SET_COOKIE].to_str().unwrap().to_string();
+    let nonce = location.split("state=").nth(1).expect("state in the Google URL").split('&').next().unwrap().to_string();
+    assert!(nonce.len() >= 32);
+    assert!(cookie.starts_with(&format!("{}={nonce};", spatial_os::auth::OAUTH_STATE_COOKIE)), "{cookie}");
+    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax"));
+
+    let callback = |query: String, cookie: Option<String>| {
+        let app = app.clone();
+        async move {
+            let mut req = Request::get(format!("/api/auth/google/callback?{query}"));
+            if let Some(c) = cookie {
+                req = req.header(header::COOKIE, c);
+            }
+            app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap()
+        }
+    };
+    let jar = format!("{}={nonce}", spatial_os::auth::OAUTH_STATE_COOKIE);
+    for (query, cookie) in [
+        ("code=attacker-code".to_string(), Some(jar.clone())),
+        (format!("code=attacker-code&state={nonce}"), None),
+        ("code=attacker-code&state=forged".to_string(), Some(jar.clone())),
+    ] {
+        let res = callback(query.clone(), cookie).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{query}");
+        let cleared = res.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cleared.contains("Max-Age=0"));
+        assert!(!cleared.starts_with(spatial_os::auth::COOKIE_NAME), "no session cookie on a refused callback");
+    }
+}
+
+/// CORS used to mirror any origin with credentials. Now: no CORS headers unless the origin is
+/// listed in `CORS_ALLOWED_ORIGINS`.
+#[tokio::test]
+async fn security_cors_is_same_origin_unless_listed() {
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use tower::ServiceExt;
+
+    assert!(spatial_os::routes::cors_layer(&[]).is_none(), "same-origin by default");
+
+    let app = |origins: &[String]| {
+        let router = axum::Router::new().route("/api/auth/me", axum::routing::get(|| async { "me" }));
+        match spatial_os::routes::cors_layer(origins) {
+            Some(cors) => router.layer(cors),
+            None => router,
+        }
+    };
+    let get = |router: axum::Router, origin: &str| {
+        let req = Request::get("/api/auth/me").header(header::ORIGIN, origin).body(Body::empty()).unwrap();
+        async move { router.oneshot(req).await.unwrap() }
+    };
+
+    let res = get(app(&[]), "https://evil.example").await;
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+
+    let listed = vec!["https://app.zavora.example".to_string()];
+    let res = get(app(&listed), "https://evil.example").await;
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "unlisted origins are not mirrored");
+    let res = get(app(&listed), "https://app.zavora.example").await;
+    assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "https://app.zavora.example");
+    assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+}
+
+#[test]
+fn security_origin_check_matches_base_url_and_loopback_only() {
+    use spatial_os::config::{origin_allowed, origin_of};
+
+    assert_eq!(origin_of("https://os.zavora.example/app?x=1").as_deref(), Some("https://os.zavora.example"));
+    assert_eq!(origin_of("http://127.0.0.1:9847").as_deref(), Some("http://127.0.0.1:9847"));
+    assert_eq!(origin_of("not a url"), None);
+
+    let public = vec!["https://os.zavora.example".to_string()];
+    assert!(origin_allowed("https://os.zavora.example", &public));
+    assert!(!origin_allowed("https://evil.example", &public));
+    assert!(!origin_allowed("http://os.zavora.example", &public), "scheme is part of the origin");
+    assert!(!origin_allowed("https://os.zavora.example.evil.example", &public));
+    assert!(!origin_allowed("null", &public));
+
+    let local = vec!["http://127.0.0.1:9847".to_string()];
+    assert!(origin_allowed("http://localhost:9847", &local), "localhost and 127.0.0.1 are one machine");
+    assert!(origin_allowed("http://[::1]:9847", &local));
+    assert!(!origin_allowed("http://localhost:3000", &local), "another local port is another origin");
+    assert!(!origin_allowed("http://rebound.evil.example:9847", &local), "DNS rebinding is not loopback");
+
+    let any = vec!["http://0.0.0.0:9847".to_string()];
+    assert!(origin_allowed("http://localhost:9847", &any), "a wildcard bind still serves this machine");
+    assert!(!origin_allowed("http://0.0.0.0:9847.evil.example", &any));
+}
+
+/// `/ws/voice` checks Origin and the AWP rate limit before the upgrade (CORS does not cover
+/// websockets); `/api/ambient/dnd` needs Known trust like every other setting.
+#[tokio::test]
+async fn security_voice_ws_origin_and_dnd_capability() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let (mut state, known) = known_app_state();
+    state.voice.allowed_origins = vec!["https://os.zavora.example".into()];
+    let app = axum::Router::new()
+        .route("/ws/voice", axum::routing::get(spatial_os::routes::voice::ws_voice))
+        .route("/api/ambient/dnd", axum::routing::post(spatial_os::routes::ambient::set_dnd))
+        .with_state(state.clone());
+
+    let ws = |origin: Option<&str>| {
+        let mut req = Request::get("/ws/voice");
+        if let Some(o) = origin {
+            req = req.header(header::ORIGIN, o);
+        }
+        let app = app.clone();
+        let req = req.body(Body::empty()).unwrap();
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+    assert_eq!(ws(Some("https://evil.example")).await, StatusCode::FORBIDDEN);
+    // Allowed or absent Origin passes the checks; this plain GET then fails the upgrade itself.
+    assert_ne!(ws(Some("https://os.zavora.example")).await, StatusCode::FORBIDDEN);
+    assert_ne!(ws(None).await, StatusCode::FORBIDDEN);
+
+    let dnd = |headers: axum::http::HeaderMap| {
+        let mut req = Request::post("/api/ambient/dnd")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .unwrap();
+        req.headers_mut().extend(headers);
+        let app = app.clone();
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+    assert_eq!(dnd(axum::http::HeaderMap::new()).await, StatusCode::FORBIDDEN, "anonymous callers cannot silence agents");
+    assert_eq!(dnd(known).await, StatusCode::OK);
+    assert!(state.ambient.snapshot().await.0);
+
+    use adk_awp::BusinessContextLoader;
+    let ctx = BusinessContextLoader::from_file(&common::manifest_dir().join("business.toml")).unwrap().load();
+    let cap = ctx.capabilities.iter().find(|c| c.name == "set_dnd").expect("set_dnd capability");
+    assert_eq!(cap.access_level, awp_types::TrustLevel::Known);
+}
+
+/// The dev ledger and memory keys are public (they are in the source), so Postgres mode refuses
+/// to boot without real ones; offline and demo boot keep the fallback.
+#[test]
+fn security_postgres_mode_requires_real_secrets() {
+    use spatial_os::config::require_secret;
+
+    common::load_env();
+    let mut config = AppConfig::from_env().expect("config");
+    let strong = || Some("k".repeat(spatial_os::config::MIN_SECRET_BYTES));
+    config.database_url = None;
+    config.jwt_secret = None;
+    config.ledger_hash_key = None;
+    config.memory_master_key = None;
+    config.check_secrets().expect("offline / demo boot keeps the dev fallback");
+
+    config.database_url = Some("postgres://localhost/agentrix".into());
+    let err = config.check_secrets().expect_err("dev keys must not guard real data").to_string();
+    assert!(err.contains("LEDGER_HASH_KEY"), "{err}");
+    config.ledger_hash_key = strong();
+    let err = config.check_secrets().expect_err("memory key missing").to_string();
+    assert!(err.contains("MEMORY_MASTER_KEY"), "{err}");
+    config.memory_master_key = Some("change-me-to-a-long-random-string".into());
+    assert!(config.check_secrets().is_err(), "the .env.example placeholder is refused");
+    config.memory_master_key = strong();
+    config.check_secrets().expect("real keys boot");
+
+    config.jwt_secret = Some("change-me-in-production".into());
+    assert!(config.check_secrets().is_err());
+    config.jwt_secret = Some("short-secret".into());
+    assert!(config.check_secrets().unwrap_err().to_string().contains("JWT_SECRET"));
+    config.database_url = None;
+    assert!(config.check_secrets().is_err(), "a short JWT secret lets anyone mint Known tokens, DB or not");
+    config.jwt_secret = strong();
+    config.check_secrets().expect("strong JWT secret");
+
+    assert!(require_secret("X", None).is_err());
+    assert!(require_secret("X", Some("   ")).is_err());
+    assert!(require_secret("X", Some(&"x".repeat(31))).is_err());
+    assert!(require_secret("X", Some(&"x".repeat(32))).is_ok());
 }

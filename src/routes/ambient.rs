@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use axum::{
     extract::State,
+    http::HeaderMap,
     response::sse::{Event, Sse},
+    response::Response,
     Json,
 };
 use serde::Deserialize;
@@ -24,10 +26,12 @@ pub struct DndRequest {
 
 pub async fn set_dnd(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<DndRequest>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, Response> {
+    state.awp.check(&headers, "dnd", "set_dnd").await?;
     state.ambient.set_dnd(body.enabled).await;
-    Json(serde_json::json!({ "dnd": body.enabled }))
+    Ok(Json(serde_json::json!({ "dnd": body.enabled })))
 }
 
 pub async fn stream_ambient(

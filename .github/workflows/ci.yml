@@ -71,7 +71,7 @@ jobs:
           people_rail_unavailable commit_creates
           postgres_schema ui_session_persists pg_agent_session
           domain_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_
-          consent_ tasks_ s7_
+          consent_ tasks_ s7_ security_
           work_agents work_stub_agents work_and_home_worlds home_agents bus_carries arbitration_
 
       - name: web client tests (node)
