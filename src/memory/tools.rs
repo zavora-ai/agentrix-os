@@ -1,7 +1,10 @@
 //! Memory tools for agents (S3-T3): `read_memory` (scoped) and `propose_memory` (assumed only).
 //!
-//! Every agent gets both through `crate::agents::gemini::filtered_for_agent`; the scope comes
-//! from the agent's world in `mcp_allowlists.toml`. The Mother Agent reads across worlds.
+//! Every agent gets both through `crate::agents::gemini::filtered_for_agent`, behind the
+//! permission gate like any MCP tool: `[builtin_effects]` in `mcp_allowlists.toml` classifies
+//! `read_memory` as read and `propose_memory` as write_local, so an observe agent cannot write
+//! memory and pause stops it. The scope comes from the agent's world in `mcp_allowlists.toml`.
+//! The Mother Agent reads across worlds.
 
 use std::sync::Arc;
 
@@ -11,7 +14,21 @@ use crate::domain::Domain;
 use crate::memory::service::{NewItem, Provenance, Scope, Sensitivity};
 use crate::memory::service_handle;
 
-/// A toolset holding the two memory tools for `agent_id`.
+/// Names of the tools in [`MemoryTools`]; each needs a `[builtin_effects]` class.
+pub const TOOL_NAMES: &[&str] = &["read_memory", "propose_memory"];
+
+/// The sensitivity every proposal from `agent_id` gets at least, whatever the model picked:
+/// health and finance agents' inferences are always encrypted at rest.
+pub fn sensitivity_floor(agent_id: &str) -> Option<Sensitivity> {
+    match agent_id {
+        "health_agent" | "health_wellness" => Some(Sensitivity::Health),
+        "money_agent" | "finance" => Some(Sensitivity::Financial),
+        _ => None,
+    }
+}
+
+/// A toolset holding the two memory tools for `agent_id`. Mount it behind
+/// `crate::permissions::PermissionGate`, never bare.
 pub struct MemoryTools {
     agent_id: String,
 }
@@ -91,11 +108,15 @@ pub fn propose_memory_tool(agent_id: &str) -> Arc<dyn adk_core::Tool> {
                 }
                 let category = args.get("category").and_then(|c| c.as_str()).unwrap_or("context");
                 let confidence = args.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.6) as f32;
-                let sensitivity = args
+                let requested = args
                     .get("sensitivity")
                     .and_then(|s| s.as_str())
                     .and_then(Sensitivity::parse)
                     .unwrap_or_default();
+                let sensitivity = match sensitivity_floor(&agent) {
+                    Some(floor) if !requested.encrypted_at_rest() => floor,
+                    _ => requested,
+                };
                 let sid = ctx.session_id().to_string();
                 let item = service_handle()
                     .propose(

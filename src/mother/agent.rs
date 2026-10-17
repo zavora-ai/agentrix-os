@@ -81,8 +81,10 @@ pub async fn build(
         .tool(Arc::new(get_context))
         .tool(Arc::new(read_observations))
         .tool(Arc::new(compose))
-        .tool(crate::memory::tools::read_memory_tool("mother"))
-        .tool(crate::memory::tools::propose_memory_tool("mother"))
+        .toolset(crate::permissions::PermissionGate::wrap(
+            "mother",
+            crate::memory::tools::MemoryTools::for_agent("mother"),
+        ))
         .generate_content_config(crate::llm::content_config(model_name, 0.3, 1024))
         .build()?;
 

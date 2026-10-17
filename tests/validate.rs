@@ -1601,6 +1601,91 @@ async fn gate_pause_blocks_writes_and_resume_restores() {
 }
 
 #[tokio::test]
+async fn gate_memory_tools_follow_mode_pause_audit_and_ledger() {
+    let _serial = gate_lock().lock().await;
+    use spatial_os::memory::{service_handle, Scope, Sensitivity};
+    use spatial_os::permissions::{gate, Mode, PauseScope};
+    let svc = gate::services();
+    let user = adk_tool::SimpleToolContext::new("x").user_id().to_string();
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(adk_tool::SimpleToolContext::new("t"));
+    let toolset = spatial_os::agents::gemini::filtered_for_agent("money_agent", Arc::new(FakeInboxTools));
+    let tools: std::collections::HashMap<String, Arc<dyn adk_core::Tool>> =
+        toolset.tools(ctx).await.unwrap().into_iter().map(|t| (t.name().to_string(), t)).collect();
+    let (read, propose) = (&tools["read_memory"], &tools["propose_memory"]);
+    assert!(read.is_read_only());
+    assert!(!propose.is_read_only(), "propose_memory is classified write_local");
+
+    let key = format!("finance.gate_test_{}", uuid::Uuid::new_v4().simple());
+    let args = serde_json::json!({"key": key, "value": "rent-due-on-the-first", "sensitivity": "normal"});
+    let stored = || async { service_handle().read(&user, Scope::MOTHER, Some(std::slice::from_ref(&key))).await };
+
+    // money_agent runs in observe: reads pass, the proposal is denied and nothing is written.
+    svc.permissions.set_mode(&user, "money_agent", Mode::Observe).await;
+    assert!(read.execute(tool_ctx("s-mem"), serde_json::json!({})).await.unwrap()["items"].is_array());
+    let denied = propose.execute(tool_ctx("s-mem"), args.clone()).await.unwrap();
+    assert_eq!(denied["status"], "denied");
+    assert!(stored().await.is_empty(), "observe must not write memory");
+
+    // Pause blocks the write even in suggest mode.
+    svc.permissions.set_mode(&user, "money_agent", Mode::Suggest).await;
+    svc.permissions.pause(PauseScope::Home, None).await;
+    let paused = propose.execute(tool_ctx("s-mem"), args.clone()).await.unwrap();
+    svc.permissions.resume(PauseScope::Home).await;
+    assert_eq!(paused["status"], "paused");
+    assert!(stored().await.is_empty(), "pause must not write memory");
+
+    // Suggest runs it as a local write; a finance agent's proposal is encrypted at rest whatever
+    // sensitivity the model asked for.
+    let ok = propose.execute(tool_ctx("s-mem"), args).await.unwrap();
+    svc.permissions.set_mode(&user, "money_agent", Mode::Observe).await;
+    assert_eq!(ok["status"], "proposed");
+    let items = stored().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].sensitivity, Sensitivity::Financial);
+
+    // Every decision is audited and ledgered, without the key or value.
+    let decisions: Vec<String> = svc
+        .audit
+        .list(&user, 1000)
+        .await
+        .into_iter()
+        .filter(|e| e.agent_id == "money_agent" && e.tool == "propose_memory")
+        .map(|e| e.decision)
+        .collect();
+    for d in ["denied", "paused", "allowed"] {
+        assert!(decisions.iter().any(|x| x == d), "no {d} audit row: {decisions:?}");
+    }
+    svc.ledger.flush().await;
+    let calls = svc
+        .ledger
+        .query(&spatial_os::intelligence::LedgerQuery { user_id: user.clone(), kind: Some("tool_call".into()), agent_id: Some("money_agent".into()), ..Default::default() })
+        .await;
+    let writes = calls.iter().filter(|e| e.meta["tool_class"] == "write_local").count();
+    assert!(writes >= 3, "denied, paused and allowed proposals are ledgered: {writes}");
+    let ledger = serde_json::to_string(&calls).unwrap();
+    assert!(!ledger.contains("rent-due") && !ledger.contains(&key), "the ledger stays content-free");
+}
+
+#[test]
+fn gate_memory_tools_are_classified_and_unknown_builtins_rejected() {
+    use spatial_os::permissions::Effect;
+    use spatial_os::tools::allowlist::AllowlistCatalog;
+    let catalog = AllowlistCatalog::from_file(&common::manifest_dir().join("mcp_allowlists.toml")).expect("catalog");
+    for agent in ["money_agent", "brief_agent", "scout_agent", "mother"] {
+        assert_eq!(catalog.effect_for(agent, "propose_memory"), Some(Effect::WriteLocal), "{agent}");
+        assert_eq!(catalog.effect_for(agent, "read_memory"), Some(Effect::Read), "{agent}");
+    }
+    // Without the table, boot validation fails; a typo in it is a config error.
+    let bare = AllowlistCatalog::from_entries(catalog.entries().to_vec());
+    assert!(bare.validate_effects(true).is_err());
+    let typo = AllowlistCatalog::from_entries(catalog.entries().to_vec())
+        .with_builtin_effects([("propose_memroy".to_string(), Effect::WriteLocal)].into_iter().collect());
+    assert!(typo.effects_for_unknown_tools().contains(&("builtin_effects".into(), "propose_memroy".into())));
+    assert_eq!(spatial_os::memory::tools::sensitivity_floor("health_agent"), Some(spatial_os::memory::Sensitivity::Health));
+    assert_eq!(spatial_os::memory::tools::sensitivity_floor("inbox_agent"), None);
+}
+
+#[tokio::test]
 async fn permission_store_resolves_override_then_user_then_default() {
     use spatial_os::permissions::{Mode, PermissionStore};
     let store = PermissionStore::in_memory();

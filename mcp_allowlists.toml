@@ -6,6 +6,14 @@
 # classifying every tool (read | write_local | schedule_with_others | send_external |
 # publish_public | financial | delete). Missing mode → suggest; missing world → shared.
 
+# Built-in memory tools (S3-T3) are mounted in-process on every agent and on the Mother. They
+# pass the same permission gate as MCP tools, so they are classified once here: observe denies
+# `propose_memory`, pause blocks it, and every call is audited and ledgered. Boot fails if a
+# built-in tool is missing from this table.
+[builtin_effects]
+read_memory = "read"
+propose_memory = "write_local"
+
 [[allowlist]]
 agent = "excel_agent"
 world = "work"

@@ -24,6 +24,9 @@ static CATALOG: OnceLock<AllowlistCatalog> = OnceLock::new();
 #[derive(Debug, Clone, Deserialize)]
 struct AllowlistFile {
     allowlist: Vec<AllowlistEntry>,
+    /// Effect class per built-in tool every agent gets in-process (`read_memory`, …).
+    #[serde(default)]
+    builtin_effects: HashMap<String, Effect>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,7 +80,12 @@ pub struct AllowlistCatalog {
     by_agent: HashMap<String, HashSet<String>>,
     specs: HashMap<String, AgentSpec>,
     entries: Vec<AllowlistEntry>,
+    builtin: HashMap<String, Effect>,
 }
+
+/// Built-in tools mounted on every agent outside the MCP allowlist; each needs an entry in the
+/// catalog's `[builtin_effects]` table.
+pub const BUILTIN_TOOLS: &[&str] = crate::memory::tools::TOOL_NAMES;
 
 impl AllowlistCatalog {
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
@@ -85,7 +93,13 @@ impl AllowlistCatalog {
             .with_context(|| format!("read allowlist catalog {}", path.display()))?;
         let file: AllowlistFile = toml::from_str(&raw)
             .with_context(|| format!("parse allowlist catalog {}", path.display()))?;
-        Ok(Self::from_entries(file.allowlist))
+        Ok(Self::from_entries(file.allowlist).with_builtin_effects(file.builtin_effects))
+    }
+
+    /// Classify the built-in tools (`[builtin_effects]`).
+    pub fn with_builtin_effects(mut self, builtin: HashMap<String, Effect>) -> Self {
+        self.builtin = builtin;
+        self
     }
 
     pub fn from_entries(entries: Vec<AllowlistEntry>) -> Self {
@@ -120,7 +134,7 @@ impl AllowlistCatalog {
                 }
             }
         }
-        Self { by_agent, specs, entries }
+        Self { by_agent, specs, entries, builtin: HashMap::new() }
     }
 
     /// Agent contract for `agent`, if the catalog knows it.
@@ -132,9 +146,22 @@ impl AllowlistCatalog {
         self.specs.values()
     }
 
-    /// Effect class of `tool` for `agent` (None when unclassified or unknown).
+    /// Effect class of `tool` for `agent`, then of the built-in tool of that name (None when
+    /// unclassified or unknown).
     pub fn effect_for(&self, agent: &str, tool: &str) -> Option<Effect> {
-        self.specs.get(agent).and_then(|s| s.effect_for(tool))
+        self.specs
+            .get(agent)
+            .and_then(|s| s.effect_for(tool))
+            .or_else(|| self.builtin.get(tool).copied())
+    }
+
+    /// Built-in tools with no `[builtin_effects]` entry.
+    pub fn builtin_tools_missing_effects(&self) -> Vec<String> {
+        BUILTIN_TOOLS
+            .iter()
+            .filter(|t| !self.builtin.contains_key(**t))
+            .map(|t| t.to_string())
+            .collect()
     }
 
     /// Default authority mode declared for `agent` (`suggest` when unknown).
@@ -168,6 +195,11 @@ impl AllowlistCatalog {
                 }
             }
         }
+        for tool in self.builtin.keys() {
+            if !BUILTIN_TOOLS.contains(&tool.as_str()) {
+                out.push(("builtin_effects".to_string(), tool.clone()));
+            }
+        }
         out.sort();
         out
     }
@@ -180,7 +212,8 @@ impl AllowlistCatalog {
             unknown.is_empty(),
             "mcp_allowlists.toml declares effects for tools not in the allowlist: {unknown:?}"
         );
-        let missing = self.tools_missing_effects();
+        let mut missing = self.tools_missing_effects();
+        missing.extend(self.builtin_tools_missing_effects().into_iter().map(|t| ("builtin_effects".to_string(), t)));
         if strict && !missing.is_empty() {
             anyhow::bail!(
                 "mcp_allowlists.toml: {} allowlisted tool(s) have no effect class (ADR-003): {:?}",
