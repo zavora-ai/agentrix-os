@@ -783,6 +783,61 @@ async fn awp_gate_blocks_anonymous_subscribe() {
     assert_eq!(err.status(), axum::http::StatusCode::FORBIDDEN);
 }
 
+/// Listing exposes subscribers' callback URLs and delete removes webhooks: both need `known`
+/// trust, like creating a subscription (BK-003).
+#[tokio::test]
+async fn awp_gate_subscription_routes_require_known_trust() {
+    use adk_awp::{EventSubscription, EventSubscriptionService};
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let (state, headers) = known_app_state();
+    let id = state
+        .event_service
+        .create(EventSubscription {
+            id: uuid::Uuid::now_v7(),
+            subscriber: "partner".into(),
+            callback_url: "https://partner.example/hook".into(),
+            event_types: vec!["ambient.done".into()],
+            secret: "s3cret-signing-key-of-at-least-32-bytes".into(),
+        })
+        .await
+        .unwrap();
+    let app = axum::Router::new()
+        .route("/awp/events/subscriptions", axum::routing::get(spatial_os::routes::awp::list_subscriptions))
+        .route("/awp/events/subscriptions/{id}", axum::routing::delete(spatial_os::routes::awp::delete_subscription))
+        .with_state(state.clone());
+    let req = |method: Method, path: String, known: bool| {
+        let mut req = Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
+        if known {
+            req.headers_mut().extend(headers.clone());
+        }
+        req
+    };
+
+    let list = app.clone().oneshot(req(Method::GET, "/awp/events/subscriptions".into(), false)).await.unwrap();
+    assert_eq!(list.status(), StatusCode::FORBIDDEN, "anonymous callers cannot enumerate callback URLs");
+    let delete = app.clone().oneshot(req(Method::DELETE, format!("/awp/events/subscriptions/{id}"), false)).await.unwrap();
+    assert_eq!(delete.status(), StatusCode::FORBIDDEN, "anonymous callers cannot delete webhooks");
+    assert_eq!(state.event_service.list().await.unwrap().len(), 1);
+
+    let list = app.clone().oneshot(req(Method::GET, "/awp/events/subscriptions".into(), true)).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = String::from_utf8(axum::body::to_bytes(list.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
+    assert!(body.contains("partner.example") && !body.contains("s3cret"), "{body}");
+    let delete = app.oneshot(req(Method::DELETE, format!("/awp/events/subscriptions/{id}"), true)).await.unwrap();
+    assert_eq!(delete.status(), StatusCode::NO_CONTENT);
+    assert!(state.event_service.list().await.unwrap().is_empty());
+
+    use adk_awp::BusinessContextLoader;
+    let ctx = BusinessContextLoader::from_file(&common::manifest_dir().join("business.toml")).unwrap().load();
+    for cap in ["list_subscriptions", "delete_subscription"] {
+        let c = ctx.capabilities.iter().find(|c| c.name == cap).unwrap_or_else(|| panic!("missing capability {cap}"));
+        assert_eq!(c.access_level, awp_types::TrustLevel::Known, "{cap}");
+    }
+}
+
 #[tokio::test]
 async fn session_store_create_for_user() {
     let store = spatial_os::state::SessionStore::new();
