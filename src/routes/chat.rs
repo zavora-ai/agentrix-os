@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::mother::{handle_intent, Entry, MotherRequest};
+use crate::routes::actions::caller_session;
 use crate::state::{AppState, ChatTurn};
 
 #[derive(Deserialize)]
@@ -32,8 +33,9 @@ pub async fn chat(
     if let Err(resp) = state.awp.check(&headers, &client_key, "chat_mother").await {
         return resp;
     }
-    let Some(record) = state.sessions.get(&session_id).await else {
-        return (StatusCode::NOT_FOUND, "session not found").into_response();
+    let record = match caller_session(&state, &headers, &session_id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
 
     handle_intent(MotherRequest {
@@ -64,9 +66,7 @@ pub async fn history(
         .check(&headers, &client_key, "chat_mother")
         .await
         .map_err(|r| r)?;
-    let Some(record) = state.sessions.get(&session_id).await else {
-        return Err(StatusCode::NOT_FOUND.into_response());
-    };
+    let record = caller_session(&state, &headers, &session_id).await?;
     Ok(Json(ChatHistoryResponse {
         session_id: record.session_id,
         turns: record.chat_history,

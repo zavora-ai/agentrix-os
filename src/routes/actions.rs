@@ -37,6 +37,19 @@ pub async fn owned_session(state: &AppState, headers: &HeaderMap, session_id: &s
     owned_record(state, &uid.to_string(), session_id).await
 }
 
+/// The session behind a session-scoped `anonymous` route (intent, chat, events). A session
+/// created while signed in admits only that user; an anonymous one, whoever holds the id.
+pub async fn caller_session(state: &AppState, headers: &HeaderMap, session_id: &str) -> Result<SessionRecord, Response> {
+    let Some(record) = state.sessions.get(session_id).await else {
+        return Err((StatusCode::NOT_FOUND, "session not found").into_response());
+    };
+    let caller = state.awp.user_id(headers).map(|u| u.to_string());
+    if !record.admits(caller.as_deref()) {
+        return Err((StatusCode::FORBIDDEN, "not your session").into_response());
+    }
+    Ok(record)
+}
+
 async fn owned_record(state: &AppState, user: &str, session_id: &str) -> Result<SessionRecord, Response> {
     let Some(record) = state.sessions.get(session_id).await else {
         return Err((StatusCode::NOT_FOUND, "session not found").into_response());

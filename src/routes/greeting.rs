@@ -1,5 +1,7 @@
 use axum::{
     extract::{Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
@@ -15,13 +17,19 @@ pub struct GreetingQuery {
 
 pub async fn get_greeting(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<GreetingQuery>,
-) -> Json<GreetingPayload> {
+) -> Result<Json<GreetingPayload>, Response> {
     let mut home_location = None;
-    if let Some(sid) = q.session_id.as_deref() {
-        if let Some(rec) = state.sessions.get(sid).await {
-            home_location = state.memory.profile(&rec.user_id, "home_location").await;
+    if let Some(sid) = q.session_id.as_deref()
+        && let Some(rec) = state.sessions.get(sid).await
+    {
+        // The weather line names the owner's home location: a signed-in session's is theirs alone.
+        let caller = state.awp.user_id(&headers).map(|u| u.to_string());
+        if !rec.admits(caller.as_deref()) {
+            return Err((StatusCode::FORBIDDEN, "not your session").into_response());
         }
+        home_location = state.memory.profile(&rec.user_id, "home_location").await;
     }
     let payload = greeting::compose(
         state.greeting_runner.as_ref(),
@@ -31,5 +39,5 @@ pub async fn get_greeting(
         home_location.as_deref(),
     )
     .await;
-    Json(payload)
+    Ok(Json(payload))
 }

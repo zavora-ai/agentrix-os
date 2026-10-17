@@ -79,7 +79,15 @@ pub async fn ws_voice(
     if let Err(resp) = state.awp.check(&headers, &key, "stream_voice").await {
         return resp;
     }
+    // Suzy reads the session's cards into her instructions and hands its id to intents, so a
+    // signed-in user's session is theirs alone (`SessionRecord::admits`).
     let user = state.awp.user_id(&headers).map(|u| u.to_string());
+    if let Some(sid) = query.session_id.as_deref()
+        && let Some(record) = state.sessions.get(sid).await
+        && !record.admits(user.as_deref())
+    {
+        return (StatusCode::FORBIDDEN, "not your session").into_response();
+    }
     match ws {
         Ok(ws) => ws
             .max_message_size(MAX_WS_MESSAGE_BYTES)
@@ -92,12 +100,14 @@ pub async fn ws_voice(
 
 /// The UI session this voice session belongs to — the id the client keeps and submits intents
 /// with. The page's own session when it passes one that exists and is not someone else's
-/// (signed in: it must be the JWT user's); otherwise a new one for the JWT user, created the
+/// (signed in: it must be the JWT user's; a session created while signed in is never handed to
+/// another caller, `SessionRecord::admits`); otherwise a new one for the JWT user, created the
 /// way `POST /api/sessions` does. A random owner here made wave → briefing and every later
 /// intent run as a stranger.
 pub async fn resolve_ui_session(state: &AppState, session_id: Option<&str>, user: Option<String>) -> String {
     if let Some(sid) = session_id
         && let Some(record) = state.sessions.get(sid).await
+        && record.admits(user.as_deref())
         && user.as_deref().is_none_or(|u| u == record.user_id)
     {
         return record.session_id;
@@ -142,9 +152,9 @@ async fn handle_voice_ws(
     // Resolved before the runner is built, so Suzy's tools (submit_intent, session context)
     // are bound to this session instead of minting one per call. The runner's own id is not a
     // UI session: sending that as `session_id` made every intent raised from voice a 404.
-    let ui_session_id = resolve_ui_session(&state, session_id.as_deref(), user).await;
+    let ui_session_id = resolve_ui_session(&state, session_id.as_deref(), user.clone()).await;
 
-    let runner = match crate::voice::realtime::build_suzy_runner(&state, Some(ui_session_id.clone())).await {
+    let runner = match crate::voice::realtime::build_suzy_runner(&state, Some(ui_session_id.clone()), user).await {
         Ok(r) => std::sync::Arc::new(r),
         Err(e) => {
             error!("voice runner init failed: {e:#}");

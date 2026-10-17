@@ -141,6 +141,7 @@ mod tests {
             agents_active: vec![],
             agents_resting: vec![],
             chat_history: vec![],
+            signed_in: false,
         }
     }
 

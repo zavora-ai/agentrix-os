@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agents::suzy;
-use crate::state::{AppState, SessionStore};
+use crate::state::{AppState, SessionRecord, SessionStore};
 use crate::voice::camera;
 
 /// Gemini Live wire format: 16 kHz PCM16 in, 24 kHz PCM16 out.
@@ -55,18 +55,23 @@ pub fn read_aloud_prompt(text: &str) -> String {
     )
 }
 
+/// The UI session, if `caller` (the websocket's JWT subject) may act in it. The route checks
+/// this before the upgrade; every read here checks it again.
+async fn admitted(sessions: &SessionStore, session_id: Option<&str>, caller: Option<&str>) -> Option<SessionRecord> {
+    sessions.get(session_id?).await.filter(|r| r.admits(caller))
+}
+
 /// `get_session_context` — the browser session's scenario, cards and artifacts.
 struct SessionContextTool {
     sessions: SessionStore,
     session_id: Option<String>,
+    caller: Option<String>,
 }
 
 #[async_trait]
 impl ToolHandler for SessionContextTool {
     async fn execute(&self, _call: &ToolCall) -> adk_realtime::Result<serde_json::Value> {
-        if let Some(sid) = &self.session_id
-            && let Some(record) = self.sessions.get(sid).await
-        {
+        if let Some(record) = admitted(&self.sessions, self.session_id.as_deref(), self.caller.as_deref()).await {
             return Ok(json!({
                 "session_id": record.session_id,
                 "context": suzy::session_context(&record),
@@ -85,6 +90,7 @@ impl ToolHandler for SessionContextTool {
 struct SubmitIntentTool {
     state: AppState,
     session_id: Option<String>,
+    caller: Option<String>,
 }
 
 #[async_trait]
@@ -95,12 +101,12 @@ impl ToolHandler for SubmitIntentTool {
             return Ok(json!({ "status": "error", "message": "intent text required" }));
         }
         let (session_id, user_id) = match &self.session_id {
-            Some(id) => match self.state.sessions.get(id).await {
+            Some(id) => match admitted(&self.state.sessions, Some(id), self.caller.as_deref()).await {
                 Some(record) => (record.session_id, record.user_id),
                 None => return Ok(json!({ "status": "error", "message": "session not found" })),
             },
             None => {
-                let record = self.state.sessions.create().await;
+                let record = self.state.sessions.create_for_caller(self.caller.clone()).await;
                 (record.session_id, record.user_id)
             }
         };
@@ -122,6 +128,7 @@ impl ToolHandler for SubmitIntentTool {
 pub async fn build_suzy_runner(
     state: &AppState,
     session_id: Option<String>,
+    caller: Option<String>,
 ) -> anyhow::Result<RealtimeRunner> {
     let model = state
         .voice
@@ -151,7 +158,7 @@ pub async fn build_suzy_runner(
     }
     if let Some(sid) = &session_id {
         instruction.push_str(&format!("\nActive UI session id: {sid}."));
-        if let Some(record) = state.sessions.get(sid).await {
+        if let Some(record) = admitted(&state.sessions, Some(sid), caller.as_deref()).await {
             instruction.push_str(&format!(
                 "\n\nCurrent session context:\n{}",
                 suzy::session_context(&record)
@@ -177,6 +184,7 @@ pub async fn build_suzy_runner(
             SessionContextTool {
                 sessions: state.sessions.clone(),
                 session_id: session_id.clone(),
+                caller: caller.clone(),
             },
         )
         .tool(
@@ -201,6 +209,7 @@ pub async fn build_suzy_runner(
             SubmitIntentTool {
                 state: state.clone(),
                 session_id: session_id.clone(),
+                caller,
             },
         );
 
@@ -271,9 +280,24 @@ mod tests {
         let call = ToolCall { call_id: "c1".into(), name: "submit_intent".into(), arguments: json!({ "text": "   " }) };
         assert_eq!(call.arguments["text"].as_str().unwrap().trim(), "");
         let call = ToolCall { call_id: "c2".into(), name: "get_session_context".into(), arguments: json!({}) };
-        let tool = SessionContextTool { sessions: SessionStore::new(), session_id: Some("missing".into()) };
+        let tool = SessionContextTool { sessions: SessionStore::new(), session_id: Some("missing".into()), caller: None };
         let out = tool.execute(&call).await.unwrap();
         assert!(out["session_id"].is_null());
         assert!(out["context"].as_str().unwrap().contains("No active session"));
+    }
+
+    #[tokio::test]
+    async fn session_context_tool_reads_a_signed_in_session_only_for_its_owner() {
+        let sessions = SessionStore::new();
+        let record = sessions.create_signed_in("owner".into()).await;
+        let call = ToolCall { call_id: "c".into(), name: "get_session_context".into(), arguments: json!({}) };
+        let read_as = |caller: Option<&str>| SessionContextTool {
+            sessions: sessions.clone(),
+            session_id: Some(record.session_id.clone()),
+            caller: caller.map(Into::into),
+        };
+        assert!(read_as(Some("someone-else")).execute(&call).await.unwrap()["session_id"].is_null());
+        assert!(read_as(None).execute(&call).await.unwrap()["session_id"].is_null());
+        assert_eq!(read_as(Some("owner")).execute(&call).await.unwrap()["session_id"], json!(record.session_id));
     }
 }
