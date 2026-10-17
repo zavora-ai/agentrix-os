@@ -54,6 +54,8 @@ The only hard cross-track dependency is that observations surface inside the bri
 
 | Team sprint | Dates | James | Kim | Robert | Jotham | Tag on completion |
 |---|---|---|---|---|---|---|
+| A | TBD | 🟡 | ⬜ | ⬜ | ✅ | `v1.4.0-p2` |
+| A | TBD | 🟡 | 🟡 | ⬜ | 🟡 | `v1.4.0-p2` |
 | A | TBD | 🟡 | ✅ | ⬜ | 🟡 | `v1.4.0-p2` |
 | B | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.5.0-p2` |
 | C | TBD | ⬜ | ⬜ | ⬜ | ⬜ | `v1.6.0-p2` (R2) |
@@ -126,7 +128,7 @@ Owns `src/intelligence/` and the synthetic data scripts. Starts on day one again
 
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|
-| **A** | S7-T1 · S7-T2 · S7-T9 | Pattern aggregation over the ledger into `activity_daily (user_id, day, dimension, value)` for the §7.2 dimensions (migration 010 via James). Baseline: median + MAD, weekday/weekend classes, 28-day window, 14-day warm-up, drift rule (§8.2), 7-day cooldown, "meaningful" rule (≥ 2 dims or 1 dim ≥ 10 d). Tests on `synth_ledger.py --weeks 6 --drift`: exactly one drift observation; warm-up suppresses; cooldown suppresses repeats. | Migration numbering from James | 🟡 PR #10 — code + tests; CI run and Kim review pending |
+| **A** | S7-T1 · S7-T2 · S7-T9 | Pattern aggregation over the ledger into `activity_daily (user_id, day, dimension, value)` for the §7.2 dimensions (migration 010 via James). Baseline: median + MAD, weekday/weekend classes, 28-day window, 14-day warm-up, drift rule (§8.2), 7-day cooldown, "meaningful" rule (≥ 2 dims or 1 dim ≥ 10 d). Tests on `synth_ledger.py --weeks 6 --drift`: exactly one drift observation; warm-up suppresses; cooldown suppresses repeats. | Migration numbering from James | ✅ PR #10 merged (51d1c00): patterns, baseline, s7_ tests on CI |
 | **B** | S7-T3 · S7-T4 · S7-T5 · S7-T7 · S7-T8 | Phrasing: facts → neutral text via LLM, **lint** rejects banned vocabulary and requires number + period + baseline reference, deterministic fallback template. Jobs: nightly full recompute + 30-min incremental on `AmbientAgent`/`CronTrigger`, respecting DND and quiet hours. `GET /api/observations`, accept/dismiss/snooze/correct, `observation` SSE event. Confirmation: "Is this your usual routine?" → `baselines.confirmed` + known memory `routine.*`; re-learn resets the window. Per-dimension toggles. | Observations API to Robert | ⬜ |
 | **C** | S8-T1 · S8-T2 · S8-T4 · S8-T6 · S8-T7 | Balance: attention share, spillover after `work.end`, weekend work, postponement debt (`postponed_count ≥ 3`), family/social cadence vs baseline → `balance` observations. Conflict detection across both identities' calendars + protected time → `conflict` observations (replaces the S6-T4 check). Digital Behavior: context switching, notification load, long uninterrupted work > 120 min, distractions in focus blocks, social consumption vs baseline. Balance facts for the briefing. Tests: seeded spillover → one observation; seeded conflict → one question; lint blocks "too much"/"should". | Conflict observations to Kim's arbitration | ⬜ |
 | **D** | S9-T1 · S9-T3 · S9-T7 | Reading events (news opens, research briefs, artifact opens, imports: browser reading list JSON, Kindle highlights CSV) → content-free `reading` ledger rows + `reading_items` under the `reading` consent. Nightly topic extraction (LLM, batched), weights = recency × frequency, edges to projects and goals; taxonomy ≤ 50 topics per user. Tests: imported items → topics → trend query; consent revoked → import refused. | Graph to Kim's agent and Robert's view | ⬜ |
