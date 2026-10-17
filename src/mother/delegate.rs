@@ -368,6 +368,7 @@ pub fn merge_target_events(targets: &[Target], per_target: Vec<(Vec<serde_json::
                         agent: card.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string(),
                         domain,
                         resolve: None,
+                        simulated: crate::orchestrator::fallback::is_simulated(&card),
                     });
                     merged.cards.push((offset + i, card.clone()));
                     merged.events.push(FieldEvent::CardSpawn { index: offset + i, card, domain });

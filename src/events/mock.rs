@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::sse::{to_event, ConductStep, FieldEvent};
-use crate::orchestrator::coordinator;
-use crate::scenarios::{self, tour};
+use crate::orchestrator::{coordinator, fallback};
+use crate::scenarios;
 use crate::state::SessionStore;
 
 pub fn pick_scenario(text: &str) -> &'static str {
@@ -154,20 +154,24 @@ pub fn stream_intent(text: &str) -> ReceiverStream<Result<axum::response::sse::E
     stream_intent_with_scenario(
         pick_scenario(text),
         text,
-        None,
-        None,
+        false,
         None,
         None,
     )
 }
 
+/// Stream a scripted scenario.
+///
+/// `simulated = false` is the no-key mock tour (labeled by the UI's "Simulated agents" banner) and
+/// streams exactly the scripted cards and summary. `simulated = true` is a live deployment whose
+/// runner for this scenario did not boot: every card and resolve carries `"simulated": true`, the
+/// card text says "Simulated sample", and the summary says so instead of reading the script out.
 pub fn stream_intent_with_scenario(
     key: &str,
     text: &str,
-    suzy_runner: Option<std::sync::Arc<adk_runner::Runner>>,
+    simulated: bool,
     sessions: Option<SessionStore>,
     session_id: Option<String>,
-    user_id: Option<String>,
 ) -> ReceiverStream<Result<axum::response::sse::Event, Infallible>> {
     let (tx, rx) = mpsc::channel(64);
     let text = text.to_string();
@@ -178,7 +182,11 @@ pub fn stream_intent_with_scenario(
             store.set_scenario(sid, &key, Some(&text)).await;
         }
         let cards: Vec<serde_json::Value> =
-            serde_json::from_str(scenario_cards(&key)).unwrap_or_default();
+            serde_json::from_str::<Vec<serde_json::Value>>(scenario_cards(&key))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| if simulated { fallback::simulated_card(&c) } else { c })
+                .collect();
 
         let _ = tx
             .send(Ok(to_event(&FieldEvent::Scenario {
@@ -249,34 +257,12 @@ pub fn stream_intent_with_scenario(
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let (Some(store), Some(sid), Some(uid)) =
-            (&sessions, &session_id, &user_id)
-        {
-            coordinator::emit_suzy_and_suggest(
-                &tx,
-                suzy_runner.as_ref(),
-                store,
-                sid,
-                uid,
-                &key,
-            )
-            .await;
+        let html = if simulated {
+            fallback::simulated_summary(&key)
         } else {
-            let _ = tx
-                .send(Ok(to_event(&FieldEvent::SuzySummary {
-                    key: key.clone(),
-                    html: suzy_summary(&key).to_string(),
-                })))
-                .await;
-            if let Some(action) = tour::action_prompt(&key) {
-                let _ = tx
-                    .send(Ok(to_event(&FieldEvent::Suggest {
-                        text: action.into(),
-                        kind: "action".into(),
-                    })))
-                    .await;
-            }
-        }
+            suzy_summary(&key).to_string()
+        };
+        coordinator::emit_summary_and_suggest(&tx, &key, html).await;
         let _ = tx.send(Ok(to_event(&FieldEvent::Done))).await;
     });
 
@@ -312,10 +298,13 @@ fn deck_conduct_steps() -> Vec<ConductStep> {
     ]
 }
 
+/// Scripted action turn. `simulated` has the same meaning as in [`stream_intent_with_scenario`]:
+/// a simulated deck was never built, so "combine" says so instead of announcing a finished deck.
 pub fn stream_action(
     action: &str,
     scenario: Option<&str>,
     _text: &str,
+    simulated: bool,
 ) -> ReceiverStream<Result<axum::response::sse::Event, Infallible>> {
     let (tx, rx) = mpsc::channel(32);
     let action = action.to_string();
@@ -324,7 +313,14 @@ pub fn stream_action(
     tokio::spawn(async move {
         let key = scenario.as_deref().unwrap_or("morning");
 
-        if action == "combine" && key == "deck" {
+        if action == "combine" && key == "deck" && simulated {
+            let _ = tx
+                .send(Ok(to_event(&FieldEvent::SuzySummary {
+                    key: "deck".into(),
+                    html: "That deck was a <b>simulated sample</b>, so there is nothing to combine — no files were built.".into(),
+                })))
+                .await;
+        } else if action == "combine" && key == "deck" {
             let _ = tx
                 .send(Ok(to_event(&FieldEvent::Conduct {
                     steps: deck_conduct_steps(),

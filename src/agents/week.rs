@@ -91,11 +91,10 @@ fn summarize_health_csv(csv: &str) -> String {
             }
         }
     }
-    let avg = if sleep_hours.is_empty() {
-        6.1
-    } else {
-        sleep_hours.iter().sum::<f64>() / sleep_hours.len() as f64
-    };
+    if sleep_hours.is_empty() {
+        return format!("No sleep rows in health.csv · steps {steps}");
+    }
+    let avg = sleep_hours.iter().sum::<f64>() / sleep_hours.len() as f64;
     let mut out = format!("avg sleep {avg:.1}h · steps {steps} · imported from health.csv");
     if let Some(e) = health_escalation(avg, sleep_hours.len()) {
         out.push_str(" · ");

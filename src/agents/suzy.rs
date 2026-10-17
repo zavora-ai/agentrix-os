@@ -50,6 +50,10 @@ pub fn session_context(record: &SessionRecord) -> String {
             .get("title")
             .and_then(|t| t.as_str())
             .unwrap_or("card");
+        if crate::orchestrator::fallback::is_simulated(&card.card) {
+            lines.push(format!("{title}: simulated sample, not the user's data"));
+            continue;
+        }
         let status = card.status.as_str();
         if let Some(resolve) = &card.resolve {
             lines.push(format!("{title} ({status}): {resolve}"));

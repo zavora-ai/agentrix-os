@@ -3,6 +3,7 @@ use std::sync::Arc;
 use adk_runner::Runner;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::orchestrator::fallback;
 use crate::orchestrator::workflow::{AgentSlot, WorkflowStreamConfig};
 use crate::orchestrator::workflow::stream_workflow;
 use crate::state::SessionStore;
@@ -33,77 +34,40 @@ fn status_line(tool: &str) -> &'static str {
     }
 }
 
-fn headlines_resolve(text: &str) -> serde_json::Value {
-    let count = text.lines().filter(|l| !l.trim().is_empty()).count().max(1);
-    let sub = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("Top stories from live sources")
-        .chars()
-        .take(80)
-        .collect::<String>();
-    serde_json::json!({
-        "big": format!("{count} big stories"),
-        "sub": sub,
-        "actions": ["Read aloud", "Open"]
-    })
+fn headlines_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "Headlines returned nothing this time", &["Read aloud", "Open"])
 }
 
-fn markets_resolve(text: &str) -> serde_json::Value {
-    let lower = text.to_lowercase();
-    let pct = if lower.contains('+') {
-        "+0.6% pre-open"
-    } else if lower.contains('-') {
-        "−0.4% pre-open"
-    } else {
-        "Markets mixed"
-    };
-    serde_json::json!({
-        "big": pct,
-        "sub": text.lines().next().unwrap_or("Watchlist update").chars().take(60).collect::<String>(),
-        "actions": ["Details", "Set alert"]
-    })
-}
-
-fn now_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| {
-            if l.starts_with("<b>") || l.starts_with('🔴') {
-                l.to_string()
-            } else {
-                format!("<b>•</b> {l}")
-            }
+/// First signed percentage the agent wrote (`+0.62%`, `-1.1%`, `−0.4%`), as written.
+fn first_percent(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|t| t.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';' | ':' | '*')))
+        .find(|t| {
+            t.ends_with('%')
+                && t.starts_with(['+', '-', '−'])
+                && t.trim_start_matches(['+', '-', '−']).trim_end_matches('%').parse::<f64>().is_ok()
         })
-        .collect();
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>•</b> Trending topics loading".into(),
-            "<b>•</b> Markets in focus".into(),
-            "<b>•</b> Check headlines card".into(),
-        ]
-    } else {
-        lines
-    };
-    serde_json::json!({
-        "lines": lines,
-        "actions": ["Watch", "Dismiss"]
-    })
+        .map(str::to_string)
 }
 
-fn resolve(author: &str, tool_text: &str, agent_text: &str) -> serde_json::Value {
-    let combined = if agent_text.is_empty() {
-        tool_text.to_string()
-    } else {
-        format!("{tool_text}\n{agent_text}")
-    };
+/// The big number is a percentage the markets agent actually reported; never guessed from a sign.
+fn markets_resolve(agent_text: &str) -> serde_json::Value {
+    let actions = ["Details", "Set alert"];
+    match (first_percent(agent_text), fallback::first_line(agent_text, 72)) {
+        (Some(pct), Some(sub)) => serde_json::json!({ "big": pct, "sub": sub, "actions": actions }),
+        _ => fallback::lines_or_unavailable(agent_text, "Markets returned nothing this time", &actions),
+    }
+}
+
+fn now_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "Live events returned nothing this time", &["Watch", "Dismiss"])
+}
+
+fn resolve(author: &str, _tool_text: &str, agent_text: &str) -> serde_json::Value {
     match author {
-        "headlines_agent" => headlines_resolve(&combined),
-        "markets_agent" => markets_resolve(&combined),
-        "now_agent" => now_resolve(&combined),
+        "headlines_agent" => headlines_resolve(agent_text),
+        "markets_agent" => markets_resolve(agent_text),
+        "now_agent" => now_resolve(agent_text),
         _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
     }
 }

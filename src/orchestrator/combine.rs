@@ -112,6 +112,21 @@ fn find_newest_artifact(dir: &Path, ext: &str) -> Option<PathBuf> {
     newest.map(|(_, p)| p)
 }
 
+/// Newest `.ext` file in `dir` written at or after `since` (this run's output, not an old file).
+fn newest_artifact_since(dir: &Path, ext: &str, since: std::time::SystemTime) -> Option<PathBuf> {
+    let path = find_newest_artifact(dir, ext)?;
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+    (modified >= since).then_some(path)
+}
+
+/// `deck_finish` sub line: the slide count only when `describe_presentation` reported one.
+fn finish_sub(slide_count: Option<u32>) -> String {
+    match slide_count {
+        Some(n) => format!("{n} slides · numbers + story combined"),
+        None => "Numbers + story combined".into(),
+    }
+}
+
 fn collect_artifacts(dir: &Path) -> SessionArtifacts {
     SessionArtifacts {
         xlsx: find_newest_artifact(dir, "xlsx").map(|p| p.display().to_string()),
@@ -208,6 +223,7 @@ pub fn stream_combine(
             }
         };
 
+        let started = std::time::SystemTime::now();
         crate::agents::ensure_runner_session(&runner, &user_id, &session_id).await;
         let stream = match runner.run(uid, sid, content).await {
             Ok(s) => s,
@@ -252,7 +268,7 @@ pub fn stream_combine(
                         }
                         if tool == "save_presentation" {
                             combined_path = parse_saved_path(&function_response.response)
-                                .or_else(|| find_newest_artifact(&session_dir, "pptx"));
+                                .or_else(|| newest_artifact_since(&session_dir, "pptx", started));
                         }
                     }
                 }
@@ -260,20 +276,29 @@ pub fn stream_combine(
         }
 
         if combined_path.is_none() {
-            combined_path = find_newest_artifact(&session_dir, "pptx");
+            combined_path = newest_artifact_since(&session_dir, "pptx", started);
         }
+        // No deck saved by this run: say so. Announcing "Deck ready" would point at the
+        // uncombined slides (rule 1).
+        let Some(combined) = combined_path else {
+            tracing::warn!("combine produced no deck — leaving the separate files as they are");
+            let _ = tx
+                .send(Ok(to_event(&FieldEvent::Error {
+                    message: "I couldn't combine the deck this time — your numbers, story and slides are still separate files.".into(),
+                })))
+                .await;
+            let _ = tx.send(Ok(to_event(&FieldEvent::Done))).await;
+            return;
+        };
 
-        let slide_count = slide_count.unwrap_or(10);
-        let sub = format!("{slide_count} slides · numbers + story combined");
-        let url = combined_path
-            .as_ref()
-            .and_then(|p| artifacts::public_url(&user_id, &session_id, p, &artifact_root));
+        let sub = finish_sub(slide_count);
+        let url = artifacts::public_url(&user_id, &session_id, &combined, &artifact_root);
 
         let deck_finish = FieldEvent::DeckFinish {
             big: "Deck ready".into(),
             sub: sub.clone(),
             artifact_url: url.clone(),
-            slide_count: Some(slide_count),
+            slide_count,
         };
         let _ = tx.send(Ok(to_event(&deck_finish))).await;
 
@@ -298,13 +323,9 @@ pub fn stream_combine(
         )
         .await;
 
-        if let Some(path) = combined_path {
-            let mut updated = collect_artifacts(&session_dir);
-            updated.combined_pptx = Some(path.display().to_string());
-            sessions
-                .update_artifacts(&session_id, updated)
-                .await;
-        }
+        let mut updated = collect_artifacts(&session_dir);
+        updated.combined_pptx = Some(combined.display().to_string());
+        sessions.update_artifacts(&session_id, updated).await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
         let current = scenario.as_deref().unwrap_or("deck");
@@ -313,4 +334,26 @@ pub fn stream_combine(
     });
 
     ReceiverStream::new(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combine_finish_never_invents_a_slide_count() {
+        assert_eq!(finish_sub(None), "Numbers + story combined");
+        assert_eq!(finish_sub(Some(12)), "12 slides · numbers + story combined");
+    }
+
+    #[test]
+    fn an_older_deck_is_not_this_runs_output() {
+        let dir = std::env::temp_dir().join(format!("combine-since-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("slides.pptx"), b"old").unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        assert!(newest_artifact_since(&dir, "pptx", later).is_none());
+        assert!(newest_artifact_since(&dir, "pptx", std::time::UNIX_EPOCH).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

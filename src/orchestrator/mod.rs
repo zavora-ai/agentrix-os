@@ -2,6 +2,7 @@ pub mod combine;
 pub mod coordinator;
 pub mod deck;
 pub mod dispatch;
+pub mod fallback;
 pub mod sse_collect;
 pub mod lisbon;
 pub mod live;

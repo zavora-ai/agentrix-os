@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::artifacts;
 use crate::events::sse::{to_event, FieldEvent};
-use crate::orchestrator::{coordinator, persist};
+use crate::orchestrator::{coordinator, fallback, persist};
 use crate::state::{SessionArtifacts, SessionStore};
 
 fn deck_cards() -> Vec<serde_json::Value> {
@@ -55,17 +55,20 @@ fn status_line(tool: &str) -> &'static str {
     }
 }
 
-fn artifact_label(path: &Path) -> (String, String) {
+/// Card label for a saved artifact: what kind of file it is and its name. The slide count is the
+/// number of `add_slide` calls seen in this run; nothing about the content is estimated (rule 1).
+fn artifact_label(path: &Path, slides_added: u32) -> (String, String) {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("artifact");
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
-        "xlsx" => ("+38% QoQ".into(), format!("Revenue model · {name}")),
-        "docx" => ("1,240 words".into(), format!("Exec summary · {name}")),
-        "pptx" => ("10 slides".into(), format!("Pitch deck · {name}")),
-        _ => ("Ready".into(), name.into()),
+        "xlsx" => ("Workbook saved".into(), name.into()),
+        "docx" => ("Document saved".into(), name.into()),
+        "pptx" if slides_added > 0 => (format!("{slides_added} slides"), format!("Deck saved · {name}")),
+        "pptx" => ("Deck saved".into(), name.into()),
+        _ => ("Saved".into(), name.into()),
     }
 }
 
@@ -274,7 +277,7 @@ pub fn stream_deck(
                                     });
 
                                 if let Some(path) = path {
-                                    let (big, sub) = artifact_label(&path);
+                                    let (big, sub) = artifact_label(&path, slide_count);
                                     let url = artifacts::public_url(
                                         &user_id,
                                         &session_id,
@@ -326,34 +329,43 @@ pub fn stream_deck(
             if resolved[index] {
                 continue;
             }
-            if let Some(path) = find_newest_artifact(&session_dir, ext) {
-                let (big, sub) = artifact_label(&path);
-                let url =
-                    artifacts::public_url(&user_id, &session_id, &path, &artifact_root);
-                let mut resolve = serde_json::json!({
-                    "big": big,
-                    "sub": sub,
-                    "actions": if index == 2 { vec!["Save deck", "Present"] } else { vec!["Save", "Open"] },
-                });
-                if let Some(url) = url {
-                    resolve["artifact_url"] = serde_json::Value::String(url);
-                }
+            let Some(path) = find_newest_artifact(&session_dir, ext) else {
+                let resolve = fallback::unavailable(format!("No .{ext} file was saved this run"));
                 if let Some(ref store) = sessions {
                     let card = cards.get(index).cloned().unwrap_or_default();
-                    persist::card_resolve(
-                        store,
-                        &session_id,
-                        index,
-                        card,
-                        resolve.clone(),
-                        false,
-                    )
-                    .await;
+                    persist::card_resolve(store, &session_id, index, card, resolve.clone(), false).await;
                 }
                 let _ = tx
                     .send(Ok(to_event(&FieldEvent::CardResolve { index, resolve })))
                     .await;
+                continue;
+            };
+            let (big, sub) = artifact_label(&path, slide_count);
+            let url =
+                artifacts::public_url(&user_id, &session_id, &path, &artifact_root);
+            let mut resolve = serde_json::json!({
+                "big": big,
+                "sub": sub,
+                "actions": if index == 2 { vec!["Save deck", "Present"] } else { vec!["Save", "Open"] },
+            });
+            if let Some(url) = url {
+                resolve["artifact_url"] = serde_json::Value::String(url);
             }
+            if let Some(ref store) = sessions {
+                let card = cards.get(index).cloned().unwrap_or_default();
+                persist::card_resolve(
+                    store,
+                    &session_id,
+                    index,
+                    card,
+                    resolve.clone(),
+                    false,
+                )
+                .await;
+            }
+            let _ = tx
+                .send(Ok(to_event(&FieldEvent::CardResolve { index, resolve })))
+                .await;
         }
 
         if let Some(ref store) = sessions {
@@ -394,5 +406,18 @@ async fn list_sibling_artifacts(dir: &Path) -> String {
         "(none yet — excel and docs agents run first)".into()
     } else {
         lines.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_labels_state_only_what_was_observed() {
+        assert_eq!(artifact_label(Path::new("/a/model.xlsx"), 0), ("Workbook saved".into(), "model.xlsx".into()));
+        assert_eq!(artifact_label(Path::new("/a/story.docx"), 0).0, "Document saved");
+        assert_eq!(artifact_label(Path::new("/a/deck.pptx"), 0).0, "Deck saved");
+        assert_eq!(artifact_label(Path::new("/a/deck.pptx"), 7).0, "7 slides");
     }
 }

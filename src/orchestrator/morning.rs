@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::events::sse::{to_event, FieldEvent};
-use crate::orchestrator::{coordinator, persist};
+use crate::orchestrator::{coordinator, fallback, persist};
 use crate::state::SessionStore;
 
 fn morning_cards() -> Vec<serde_json::Value> {
@@ -59,87 +59,55 @@ fn text_from_response(response: &serde_json::Value) -> String {
         .to_string()
 }
 
+/// Meeting count from one `get_today` tool output (a JSON array of events).
 fn parse_meeting_count(text: &str) -> Option<usize> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
-        if let Some(arr) = v.as_array() {
-            return Some(arr.len());
-        }
-    }
-    None
+    serde_json::from_str::<serde_json::Value>(text.trim())
+        .ok()?
+        .as_array()
+        .map(Vec::len)
 }
 
-fn calendar_resolve(text: &str) -> serde_json::Value {
-    let count = parse_meeting_count(text).unwrap_or(3);
+fn calendar_resolve(meetings: Option<usize>, agent_text: &str, connected: bool) -> serde_json::Value {
+    if !connected {
+        return fallback::not_connected("Connect a calendar (mcp-calendar auth google) to see today's meetings");
+    }
+    let Some(count) = meetings else {
+        return fallback::lines_or_unavailable(agent_text, "Calendar returned nothing this time", &["Open", "Reschedule"]);
+    };
     serde_json::json!({
-        "big": format!("{count} meetings"),
-        "sub": "Calendar synced · see details in card",
+        "big": match count {
+            0 => "No meetings".to_string(),
+            1 => "1 meeting".to_string(),
+            n => format!("{n} meetings"),
+        },
+        "sub": fallback::first_line(agent_text, 72).unwrap_or_else(|| "From your calendar today".into()),
         "actions": ["Open", "Reschedule"]
     })
 }
 
-fn inbox_resolve(text: &str) -> serde_json::Value {
-    let lower = text.to_lowercase();
-    let count = if lower.contains("no unread") || lower.contains("0 email") {
-        0
-    } else if lower.contains("1 email") || lower.contains("one email") {
-        1
-    } else {
-        2
-    };
-    let big = if count == 0 {
-        "Inbox clear".to_string()
-    } else {
-        format!("{count} to reply")
-    };
-    serde_json::json!({
-        "big": big,
-        "sub": if count == 0 { "Nothing urgent" } else { "Flagged threads need you" },
-        "actions": ["Draft replies", "Snooze"]
-    })
+/// The inbox agent judges which threads need a reply; the card shows its own words, not a count.
+fn inbox_resolve(agent_text: &str, connected: bool) -> serde_json::Value {
+    if !connected {
+        return fallback::not_connected("Connect email (mcp-email auth gmail, or SMTP/IMAP) to triage your inbox");
+    }
+    fallback::lines_or_unavailable(agent_text, "Inbox returned nothing this time", &["Draft replies", "Snooze"])
 }
 
-fn brief_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| {
-            if l.starts_with("<b>") {
-                l.to_string()
-            } else {
-                format!("<b>•</b> {l}")
-            }
-        })
-        .collect();
-
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>Headlines</b> — top stories loading".into(),
-            "<b>Weather</b> — check forecast".into(),
-            "<b>Focus</b> — protect your morning block".into(),
-        ]
-    } else {
-        lines
-    };
-
-    serde_json::json!({
-        "lines": lines,
-        "actions": ["Read aloud", "Dismiss"]
-    })
+fn brief_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "Brief returned nothing this time", &["Read aloud", "Dismiss"])
 }
 
-fn resolve_for_agent(author: &str, tool_text: &str, agent_text: &str) -> serde_json::Value {
-    let combined = if agent_text.is_empty() {
-        tool_text.to_string()
-    } else {
-        format!("{tool_text}\n{agent_text}")
-    };
+struct MorningFacts {
+    meetings: Option<usize>,
+    has_calendar: bool,
+    has_inbox: bool,
+}
 
+fn resolve_for_agent(author: &str, agent_text: &str, facts: &MorningFacts) -> serde_json::Value {
     match author {
-        "calendar_agent" => calendar_resolve(&combined),
-        "inbox_agent" => inbox_resolve(&combined),
-        "brief_agent" => brief_resolve(&combined),
+        "calendar_agent" => calendar_resolve(facts.meetings, agent_text, facts.has_calendar),
+        "inbox_agent" => inbox_resolve(agent_text, facts.has_inbox),
+        "brief_agent" => brief_resolve(agent_text),
         _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
     }
 }
@@ -240,8 +208,8 @@ pub fn stream_morning(
 
         futures::pin_mut!(stream);
         let mut resolved = vec![false; 3];
-        let mut tool_buf: [String; 3] = Default::default();
         let mut agent_buf: [String; 3] = Default::default();
+        let mut facts = MorningFacts { meetings: None, has_calendar, has_inbox };
 
         while let Some(result) = stream.next().await {
             let event = match result {
@@ -273,9 +241,11 @@ pub fn stream_morning(
                                 })))
                                 .await;
                         }
-                        adk_core::Part::FunctionResponse { function_response, .. } => {
-                            tool_buf[index].push_str(&text_from_response(&function_response.response));
-                            tool_buf[index].push('\n');
+                        adk_core::Part::FunctionResponse { function_response, .. }
+                            if function_response.name == "get_today" =>
+                        {
+                            let out = text_from_response(&function_response.response);
+                            facts.meetings = parse_meeting_count(&out).or(facts.meetings);
                         }
                         adk_core::Part::Text { text } => {
                             agent_buf[index].push_str(text);
@@ -287,11 +257,7 @@ pub fn stream_morning(
             }
 
             if event.is_final_response() && !resolved[index] {
-                let resolve = resolve_for_agent(
-                    &author,
-                    &tool_buf[index],
-                    &agent_buf[index],
-                );
+                let resolve = resolve_for_agent(&author, &agent_buf[index], &facts);
                 if let Some(ref store) = sessions {
                     let card = cards.get(index).cloned().unwrap_or_default();
                     persist::card_resolve(
@@ -319,7 +285,7 @@ pub fn stream_morning(
             if resolved[index] {
                 continue;
             }
-            let resolve = resolve_for_agent(author, &tool_buf[index], &agent_buf[index]);
+            let resolve = resolve_for_agent(author, &agent_buf[index], &facts);
             if let Some(ref store) = sessions {
                 let card = cards.get(index).cloned().unwrap_or_default();
                 persist::card_resolve(
@@ -353,4 +319,27 @@ pub fn stream_morning(
     });
 
     ReceiverStream::new(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn morning_cards_never_invent_counts() {
+        let off = MorningFacts { meetings: None, has_calendar: false, has_inbox: false };
+        assert_eq!(resolve_for_agent("calendar_agent", "", &off)["big"], "Not connected");
+        assert_eq!(resolve_for_agent("inbox_agent", "", &off)["big"], "Not connected");
+
+        let on = MorningFacts { meetings: None, has_calendar: true, has_inbox: true };
+        assert_eq!(resolve_for_agent("calendar_agent", "", &on)["big"], "Unavailable");
+        assert_eq!(resolve_for_agent("inbox_agent", "", &on)["big"], "Unavailable");
+        assert_eq!(resolve_for_agent("brief_agent", "", &on)["big"], "Unavailable");
+
+        let two = MorningFacts { meetings: parse_meeting_count("[\n  {\"summary\": \"Standup\"},\n  {\"summary\": \"1:1\"}\n]"), ..on };
+        let r = resolve_for_agent("calendar_agent", "First: Standup 9:30", &two);
+        assert_eq!(r["big"], "2 meetings");
+        assert_eq!(r["sub"], "First: Standup 9:30");
+        assert_eq!(parse_meeting_count("Error: token expired"), None);
+    }
 }

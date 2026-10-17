@@ -125,7 +125,7 @@ async fn mock_combine_action_stream_completes_with_events() {
     use std::time::Duration;
 
     let result = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut stream = mock::stream_action("combine", Some("deck"), "combine");
+        let mut stream = mock::stream_action("combine", Some("deck"), "combine", false);
         let mut count = 0usize;
         while let Some(item) = stream.next().await {
             let _ = item.expect("sse event");
@@ -140,6 +140,37 @@ async fn mock_combine_action_stream_completes_with_events() {
         result >= 3,
         "deck combine mock should emit conduct + deck_finish + done, got {result}"
     );
+}
+
+/// A live deployment whose deck runner did not boot streams the scripted deck, labeled (rule 1).
+#[tokio::test]
+async fn mock_deck_stream_labels_simulated_cards_in_live_deployments() {
+    use axum::response::{IntoResponse, Sse};
+
+    let stream = mock::stream_intent_with_scenario("deck", "Build me a pitch deck", true, None, None);
+    let events = spatial_os::orchestrator::sse_collect::collect_sse_events(Sse::new(stream).into_response()).await;
+
+    let of = |kind: &str| events.iter().filter(move |e| e["type"] == kind).collect::<Vec<_>>();
+    assert_eq!(of("card_spawn").len(), 3);
+    assert!(of("card_spawn").iter().all(|e| e["card"]["simulated"] == true));
+    for e in of("card_resolve") {
+        assert_eq!(e["resolve"]["simulated"], true);
+        assert!(e["resolve"]["sub"].as_str().unwrap().starts_with("Simulated sample"), "{e}");
+    }
+    let summary = of("suzy_summary")[0]["html"].as_str().unwrap().to_string();
+    assert!(summary.contains("simulated samples"), "{summary}");
+    assert_ne!(summary, mock::suzy_summary("deck"));
+}
+
+#[tokio::test]
+async fn mock_combine_action_on_simulated_deck_builds_nothing() {
+    use axum::response::{IntoResponse, Sse};
+
+    let stream = mock::stream_action("combine", Some("deck"), "combine", true);
+    let events = spatial_os::orchestrator::sse_collect::collect_sse_events(Sse::new(stream).into_response()).await;
+    assert!(events.iter().all(|e| e["type"] != "deck_finish"), "{events:?}");
+    assert!(events.iter().any(|e| e["type"] == "suzy_summary"
+        && e["html"].as_str().unwrap_or("").contains("simulated sample")));
 }
 
 #[test]
