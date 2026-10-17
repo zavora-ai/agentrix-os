@@ -856,6 +856,55 @@ async fn pg_agent_session_roundtrip() {
     assert_eq!(loaded.app_name(), "agentrix-os-validate");
 }
 
+/// One session id lives under several app names (every runner reuses the UI session id), so an
+/// appended event must land in the session of the app that produced it, not whichever row an
+/// id-only lookup returns first.
+#[tokio::test]
+async fn pg_agent_session_events_stay_with_their_app() {
+    use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+    use adk_session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
+    use spatial_os::pg_session::PgSessionService;
+
+    let pool = common::postgres_pool().await;
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let svc = PgSessionService::new(pool);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let apps = ["agentrix-router-validate", "agentrix-suzy-validate", "agentrix-mother-validate"];
+    for app in apps {
+        svc.create(CreateRequest { app_name: app.into(), user_id: user_id.clone(), session_id: Some(session_id.clone()), state: Default::default() })
+            .await
+            .expect("create agent session");
+    }
+
+    // Append 1, 2 and 3 events to the three apps, in reverse creation order.
+    for (n, app) in apps.iter().enumerate().rev() {
+        for i in 0..=n {
+            let identity = AdkIdentity::new(
+                AppName::try_from(*app).unwrap(),
+                UserId::try_from(user_id.as_str()).unwrap(),
+                SessionId::try_from(session_id.as_str()).unwrap(),
+            );
+            svc.append_event_for_identity(AppendEventRequest { identity, event: adk_core::Event::new(format!("{app}-{i}")) })
+                .await
+                .expect("append event");
+        }
+    }
+
+    for (n, app) in apps.iter().enumerate() {
+        let loaded = svc
+            .get(GetRequest { app_name: (*app).into(), user_id: user_id.clone(), session_id: session_id.clone(), num_recent_events: None, after: None })
+            .await
+            .expect("get agent session");
+        let events = loaded.events().all();
+        assert_eq!(events.len(), n + 1, "{app} holds exactly its own events");
+        assert!(events.iter().all(|e| e.invocation_id.starts_with(app)), "{app} holds no other app's events");
+    }
+
+    // The id-only path cannot tell the apps apart and refuses rather than guessing.
+    assert!(svc.append_event(&session_id, adk_core::Event::new("ambiguous")).await.is_err());
+}
+
 #[tokio::test]
 async fn people_rail_unavailable_without_slack() {
     let rail = spatial_os::rails::people::fetch(None).await;
