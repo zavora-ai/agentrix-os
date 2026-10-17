@@ -102,8 +102,34 @@ pub fn instruction() -> String {
     for g in Gesture::ALL {
         s.push_str(&format!("\n- {} → ui_gesture {{\"gesture\": \"{}\"}}: {}.", g.cue(), g.as_str(), g.effect()));
     }
-    s.push_str("\nIf a gesture is unclear or accidental, do nothing.");
+    // Measured 2026-10-17: with an empty frame and the user saying "here's my gesture", the model
+    // reported a gesture every time (wave, open_palm, swipe_right) and, after a wave, also asked
+    // for the briefing through submit_intent. Each of those acts on the user's behalf.
+    s.push_str(
+        "\nOnly call ui_gesture for a hand you can actually see making that gesture in the latest \
+         frames. Never call it because the user says they are gesturing or asks you to guess: if no \
+         hand making one of these gestures is visible, do not call it, and say you don't see a \
+         gesture if they asked. If a gesture is unclear or accidental, do nothing. The interface \
+         performs the gesture's action itself, so never call submit_intent or any other tool for \
+         the same gesture.",
+    );
     s
+}
+
+/// What `ui_gesture` returns to the model. Conclusive on purpose: a bare "relayed" with the
+/// effect read like a request, and after a wave the model also called submit_intent for the
+/// briefing the wave had already asked for.
+pub fn tool_result(raw: &str) -> serde_json::Value {
+    match Gesture::parse(raw) {
+        Some(g) => json!({
+            "status": "done",
+            "gesture": g.as_str(),
+            "effect": g.effect(),
+            "next": "The interface has already done this. Do not call submit_intent or any other \
+                     tool for this gesture. Say at most one short sentence, or nothing."
+        }),
+        None => json!({ "status": "error", "message": "unknown gesture; use one of the listed values" }),
+    }
 }
 
 pub const ALLOWED_MIMES: [&str; 3] = ["image/jpeg", "image/webp", "image/png"];
@@ -204,8 +230,19 @@ mod tests {
             assert!(allowed.iter().any(|v| v == g.as_str()));
         }
         assert!(text.contains("never mention people"), "privacy rule stays in the prompt");
+        assert!(text.contains("you can actually see"), "no gesture the model cannot see");
+        assert!(text.contains("never call submit_intent"), "a gesture is not also an intent");
         assert_eq!(schema["required"][0], "gesture");
         assert_eq!(TOOL_NAME, "ui_gesture");
+    }
+
+    #[test]
+    fn tool_result_is_conclusive_and_rejects_unknown_gestures() {
+        let done = tool_result("Wave");
+        assert_eq!(done["status"], "done");
+        assert_eq!(done["gesture"], "wave");
+        assert!(done["next"].as_str().unwrap().contains("Do not call submit_intent"));
+        assert_eq!(tool_result("thumbs_up")["status"], "error");
     }
 
     #[test]
