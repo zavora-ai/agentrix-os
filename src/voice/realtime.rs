@@ -227,18 +227,15 @@ pub async fn build_suzy_runner(
             ToolDefinition {
                 name: camera::TOOL_NAME.into(),
                 description: Some(
-                    "Report one deliberate hand gesture you recognised in the camera frames. \
-                     Call it once per gesture; the interface performs the action."
+                    "Report one deliberate hand gesture that you can see a hand making in the \
+                     latest camera frames — never one the user only describes. Call it once per \
+                     gesture; the interface performs the action."
                         .into(),
                 ),
                 parameters: Some(camera::tool_parameters()),
             },
             FnToolHandler::new(|call| {
-                let raw = call.arguments["gesture"].as_str().unwrap_or("");
-                match camera::Gesture::parse(raw) {
-                    Some(g) => Ok(json!({ "status": "relayed", "gesture": g.as_str(), "effect": g.effect() })),
-                    None => Ok(json!({ "status": "error", "message": "unknown gesture; use one of the listed values" })),
-                }
+                Ok(camera::tool_result(call.arguments["gesture"].as_str().unwrap_or("")))
             }),
         );
     }
