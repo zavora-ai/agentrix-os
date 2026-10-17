@@ -736,7 +736,6 @@ async fn boot_week_stack(
         .expect("agents_enabled implies a text-model key");
     let api_key = backend.api_key.as_str();
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let banking = tools::mcp::try_spawn_mcp_server(&config.mcp_banking_path)
         .await
         .map(|t| Arc::new(t) as Arc<dyn adk_core::Toolset>);
@@ -747,7 +746,7 @@ async fn boot_week_stack(
     let pool = Arc::new(WeekMcpPool {
         banking,
         github,
-        health_csv: week::health_csv_from_env(&manifest_dir),
+        health_csv: week::health_csv_from_env(&config.root),
     });
 
     let workflow = week::build_workflow(api_key, &backend.model, pool.as_ref()).await?;

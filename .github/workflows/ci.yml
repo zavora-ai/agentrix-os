@@ -83,3 +83,18 @@ jobs:
       - name: Docker build
         run: docker build -f spatial-os/Dockerfile -t agentrix-os:ci .
         working-directory: spatial-os/..
+
+      # Building is not enough: the image must boot with no secrets and serve its own web assets
+      # and catalogs from /app, not from the builder's source tree.
+      - name: Docker smoke test
+        run: |
+          docker run -d --name agentrix-ci -p 9847:9847 agentrix-os:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9847/health > /tmp/health.json && break
+            sleep 1
+          done
+          docker logs agentrix-ci
+          cat /tmp/health.json
+          curl -fsS -o /dev/null http://127.0.0.1:9847/
+          curl -fsS -o /dev/null http://127.0.0.1:9847/.well-known/awp.json
+          test "$(docker inspect -f '{{.Config.User}}' agentrix-os:ci)" = agentrix

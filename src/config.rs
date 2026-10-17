@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -6,6 +6,9 @@ use anyhow::{Context, Result};
 pub struct AppConfig {
     pub host: String,
     pub port: u16,
+    /// Base for every relative path below (`AGENTRIX_ROOT`, default: this crate's source
+    /// directory, which only exists where the binary was built — images set it to `/app`).
+    pub root: PathBuf,
     pub web_dir: PathBuf,
     pub static_dir: PathBuf,
     pub business_toml: PathBuf,
@@ -55,7 +58,12 @@ impl AppConfig {
         dotenvy::from_filename(".env.local").ok(); // local overrides, git-ignored
         dotenvy::dotenv().ok();
 
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = std::env::var("AGENTRIX_ROOT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let web_dir = resolve_path(&root, "WEB_DIR", "web");
 
         Ok(Self {
             host: std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into()),
@@ -63,10 +71,11 @@ impl AppConfig {
                 .unwrap_or_else(|_| "9847".into())
                 .parse()
                 .context("PORT must be a number")?,
-            web_dir: manifest_dir.join("web"),
-            static_dir: manifest_dir.join("web/static"),
-            business_toml: manifest_dir.join("business.toml"),
-            mcp_allowlists_toml: manifest_dir.join("mcp_allowlists.toml"),
+            root: root.clone(),
+            static_dir: web_dir.join("static"),
+            web_dir,
+            business_toml: resolve_path(&root, "BUSINESS_TOML", "business.toml"),
+            mcp_allowlists_toml: resolve_path(&root, "MCP_ALLOWLISTS_TOML", "mcp_allowlists.toml"),
             mcp_registry_path: std::env::var("MCP_REGISTRY_PATH")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -75,78 +84,78 @@ impl AppConfig {
                     if path.is_absolute() {
                         path
                     } else {
-                        manifest_dir.join(path)
+                        root.join(path)
                     }
                 }),
-            artifact_dir: manifest_dir
+            artifact_dir: root
                 .join(std::env::var("ARTIFACT_DIR").unwrap_or_else(|_| "./artifacts".into())),
             mcp_worksheet_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_WORKSHEET_PATH",
                 "../mcp-servers/worksheet-mcp/target/release/excel-mcp-server",
             ),
             mcp_docx_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_DOCX_PATH",
                 "../mcp-servers/docx-mcp/target/release/docx-mcp-server",
             ),
             mcp_slides_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_SLIDES_PATH",
                 "../mcp-servers/mcp-slides/target/release/slides-mcp-server",
             ),
             mcp_calendar_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_CALENDAR_PATH",
                 "../mcp-servers/mcp-calendar/target/release/mcp-calendar",
             ),
             mcp_email_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_EMAIL_PATH",
                 "../mcp-servers/mcp-email/target/release/mcp-email",
             ),
             mcp_news_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_NEWS_PATH",
                 "../mcp-servers/mcp-news/target/release/mcp-news",
             ),
             mcp_weather_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_WEATHER_PATH",
                 "../mcp-servers/mcp-weather/target/release/mcp-weather",
             ),
             mcp_market_data_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_MARKET_DATA_PATH",
                 "../mcp-servers/mcp-market-data/target/release/mcp-market-data",
             ),
             mcp_slack_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_SLACK_PATH",
                 "../mcp-servers/mcp-slack/target/release/mcp-slack",
             ),
             mcp_crm_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_CRM_PATH",
                 "../mcp-servers/mcp-crm/target/release/mcp-crm",
             ),
             mcp_banking_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_BANKING_PATH",
                 "../mcp-servers/mcp-banking/target/release/mcp-banking",
             ),
             mcp_github_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_GITHUB_PATH",
                 "../mcp-servers/mcp-github/target/release/adk-mcp-github",
             ),
             mcp_maps_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_MAPS_PATH",
                 "../mcp-servers/mcp-maps/target/release/mcp-maps",
             ),
             mcp_real_estate_path: resolve_path(
-                &manifest_dir,
+                &root,
                 "MCP_REAL_ESTATE_PATH",
                 "../mcp-servers/mcp-real-estate/target/release/mcp-real-estate",
             ),
@@ -245,12 +254,13 @@ impl AppConfig {
     }
 }
 
-fn resolve_path(manifest_dir: &PathBuf, env_key: &str, default: &str) -> PathBuf {
+/// `env_key` (or `default` when unset); relative paths resolve against the root.
+fn resolve_path(root: &Path, env_key: &str, default: &str) -> PathBuf {
     let raw = std::env::var(env_key).unwrap_or_else(|_| default.into());
     let path = PathBuf::from(&raw);
     if path.is_absolute() {
         path
     } else {
-        manifest_dir.join(path)
+        root.join(path)
     }
 }
