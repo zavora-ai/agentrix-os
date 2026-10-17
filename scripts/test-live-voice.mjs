@@ -309,5 +309,24 @@ for (const [name, words] of [['NotAllowedError', 'Camera permission denied'], ['
   assert.equal(live(p.acquired), 0);
 }
 
-console.log('live-voice: 8 scenarios passed');
+// 9. Suzy's tool calls reach the page: ui_gesture becomes `agentrix:gesture` (what gestures.js
+//    maps to a UI verb), submit_intent an intent in the page's session. adk-realtime forwards
+//    the arguments as the raw JSON string the model produced.
+{
+  const p = page({ status: VOICE_ON, media: camera });
+  await p.api.probe();
+  await p.api.startCamera({});
+  await tick(5);
+  p.sockets[0].recv({ type: 'tool_call', name: 'ui_gesture', arguments: '{"gesture":"open_palm"}' });
+  assert.deepEqual(p.seen('agentrix:gesture').map((d) => d.gesture), ['open_palm']); // (vm realm: compare fields)
+  p.sockets[0].recv({ type: 'tool_call', name: 'ui_gesture', arguments: 'not json' });
+  assert.equal(p.seen('agentrix:gesture').length, 1, 'malformed arguments are dropped');
+  p.sockets[0].recv({ type: 'tool_call', name: 'submit_intent', arguments: '{"text":"What do I need to know today?"}' });
+  const intent = p.seen('agentrix:voice-intent')[0];
+  assert.equal(intent.args.text, 'What do I need to know today?');
+  assert.equal(intent.sessionId, 'voice-1', 'the session the server bound this socket to');
+  p.api.stopCamera();
+}
+
+console.log('live-voice: 9 scenarios passed');
 process.exit(0); // the connect timeouts of closed fake sockets would keep the loop alive
