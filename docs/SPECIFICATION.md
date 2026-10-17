@@ -439,22 +439,27 @@ Keys use adk-core prefixes:
 
 ### 7.5 SSE event contract
 
-All server → client events on `POST /api/sessions/{sid}/intent` (or GET SSE channel).
+Every server → client event on the SSE streams (`POST /api/sessions/{sid}/intent`, `/action`,
+`/chat` and `/fuse`, and `POST /awp/a2a`) is one `FieldEvent` from `src/events/sse.rs`,
+serialized as JSON with a `type` tag. `web/static/types/field-events.d.ts` mirrors it for the
+client. Change the enum, the TypeScript types, `web/static/field-client.js` and this table
+together (CLAUDE.md rule 3).
 
 | Event `type` | Payload fields | UI handler |
 |--------------|----------------|------------|
-| `scenario` | `key` | set `currentKey` |
-| `card_spawn` | `id`, `glyph`, `title`, `agent`, `delay`, `attention?`, `surface?`, `simulated?` | `buildCard` + animate |
-| `card_status` | `id`, `text` | update status line |
-| `card_surface` | `id`, `surface`, `delta` | `buildSurface` partial update |
-| `card_resolve` | `id`, `resolve`, `detail?` | `resolve()` |
-| `suzy_summary` | `html`, `audio_clip?` | `showSuzy()` |
+| `scenario` | `key`, `text`, `total_cards` | `beginScenario()` |
+| `card_spawn` | `index`, `card` (`glyph`, `title`, `agent`, `attention?`, `surface?`, `waitsFor?`, `simulated?`, …), `domain` | `spawnCard()` |
+| `card_status` | `index`, `status`, `line` (string or null) | `updateStatus()` |
+| `card_surface` | `index`, `surface`, `slide`, `total` | reveals slide `slide` of the card's film (`surface: "slides"`) |
+| `card_resolve` | `index`, `resolve` (`big?`, `sub?`, `lines?`, `actions?`, `artifact_url?`, `simulated?`, `unavailable?`, …) | `ui.resolve()`; wires the Open button to `artifact_url` |
+| `error` | `message` (HTML-escaped by the server) | Suzy caption + console warning |
+| `suzy_summary` | `key`, `html` | `showSuzyCustom()`, read aloud through Live |
 | `suggest` | `text`, `kind`: `action` \| `scenario` | `armSuggestion()` |
-| `conduct` | `steps[]`: `{op, source?, target?}` | `conductAction()` server-driven |
-| `agent_active` | `id`, `title`, `glyph` | `agentActive()` |
-| `agent_done` | `id` | `agentDone()` |
-| `error` | `message` (HTML-escaped by the server), `recoverable` | toast + log |
-| `done` | — | close stream |
+| `conduct` | `steps[]`: `{op, source?, target?, delay_ms?}` | `runConductSteps()` |
+| `deck_finish` | `big`, `sub`, `artifact_url` (or null), `slide_count` (or null) | `finishDeck()` |
+| `permission_request` | `action_id`, `agent_id`, `domain`, `effect`, `summary` (content-free: argument keys only), `expires_at` | approvals inbox (`approvals.js`): toast and reload; counted as a `ui_notification` |
+| `action_result` | `action_id`, `status`, `audit_id?` | approvals inbox reloads. Declared for S2-T7; no stream emits it yet |
+| `done` | — | end of stream |
 
 `simulated: true` on a card and on its `resolve` marks a scripted sample streamed in a live
 deployment because that scenario's runner is not running; the card text reads "Simulated sample"

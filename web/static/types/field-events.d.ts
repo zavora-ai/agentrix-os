@@ -121,7 +121,7 @@ export interface PendingAction {
   args: unknown;
   /** Content-free description: agent, tool, effect, argument keys. */
   summary: string;
-  status: 'pending' | 'approved' | 'rejected' | 'failed' | 'expired';
+  status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed' | 'expired';
   trace_id: string | null;
   created_at: string;
   expires_at: string;

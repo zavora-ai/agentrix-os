@@ -142,8 +142,11 @@ Every setting is an environment variable, read in `src/config.rs` and documented
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `GOOGLE_API_KEY` | Gemini for agents, the Mother and live voice; unset means scripted mocks | unset |
-| `GEMINI_MODEL` | Text model for agents | `gemini-3.1-flash-lite` |
+| `TEXT_MODEL` | Model for the text agents (the Mother, worlds, Suzy's text). `claude-*` runs on Anthropic, anything else on Gemini | `claude-fable-5-1` |
+| `ANTHROPIC_API_KEY` | Anthropic key for a `claude-*` `TEXT_MODEL`. Without it but with `GOOGLE_API_KEY`, text falls back to `GEMINI_MODEL`; with neither, scenarios stream their mocks | unset |
+| `ANTHROPIC_EFFORT` | Effort for Claude text agents: `low`, `medium`, `high`, `xhigh` or `max` | unset (API default) |
+| `GOOGLE_API_KEY` | Gemini for live voice (always), and for text agents when `TEXT_MODEL` is a Gemini model or there is no Anthropic key | unset |
+| `GEMINI_MODEL` | Gemini text model, used when `TEXT_MODEL` is not `claude-*` or as the fallback | `gemini-3.1-flash-lite` |
 | `GEMINI_LIVE_MODEL`, `VOICE_NAME` | Live voice model and voice | `models/gemini-3.8-live`, `Aoede` |
 | `AGENTRIX_CAMERA` | Camera channel over the voice socket | `1` |
 | `MCP_*_PATH` | Binaries for worksheet, docx, slides, calendar, email, news, weather, market data, Slack, CRM, banking, GitHub, maps, real estate | `../mcp-servers/<crate>/target/release/<bin>` |
@@ -155,6 +158,9 @@ Every setting is an environment variable, read in `src/config.rs` and documented
 | `MEMORY_MASTER_KEY`, `LEDGER_HASH_KEY` | Encrypt sensitive memory values; hash ledger subjects. Required (32+ bytes) with `DATABASE_URL`: boot refuses without them | dev keys without Postgres only |
 | `AGENTRIX_WORK_MOTHER`, `AGENTRIX_HOME_MOTHER` | `0` falls back to direct per-agent fan-out | on |
 | `AGENTRIX_ALLOW_DEMO`, `BASE_URL`, `AGENTRIX_SIGNUP_ENDPOINT` | Demo mode off localhost, public URL, early-access form | see `.env.example` |
+| `AMBIENT_FAST`, `AMBIENT_RESEARCH_CRON`, `AMBIENT_SCOUT_CRON`, `AMBIENT_MAKER_CRON` | Background agent schedules (six-field cron); `AMBIENT_FAST=1` is a demo pace | every 30 min, 15 min, hour |
+| `HEALTH_CSV_PATH` | Sleep and steps CSV for the week scenario's health card | unset (labeled stub) |
+| `INTELLIGENCE_UTC_OFFSET_HOURS` | Day boundary for daily pattern aggregation | `0` |
 
 ## API
 
@@ -168,7 +174,7 @@ Every public route has a `[[capabilities]]` entry in `business.toml` with an acc
 | Memory and tasks | `GET`/`POST`/`DELETE /api/memory` · `PATCH`/`DELETE /api/memory/{id}` · `GET /api/memory/export` · `GET /api/tasks` |
 | Rails and catalogs | `GET /api/worlds` · `GET /api/greeting` · `GET /api/people` · `GET /api/live` · `GET /api/rails/background` · `GET /api/ambient` (SSE) |
 | Voice | `GET /api/voice/status` · `WS /ws/voice` — 16 kHz PCM in, 24 kHz PCM out, JSON control messages, camera frames in, tool calls out |
-| Agentic Web Protocol | `GET /.well-known/awp.json` · `GET /awp/manifest` · `POST /awp/a2a` (reaches the Mother; external callers are capped at Suggest) · `POST /awp/events/subscribe` |
+| Agentic Web Protocol | `GET /.well-known/awp.json` · `GET /awp/manifest` · `POST /awp/a2a` (reaches the Mother; external callers are capped at Suggest) · `POST /awp/events/subscribe` · `GET /awp/events/subscriptions` · `DELETE /awp/events/subscriptions/{id}` (all three `known`) |
 | Operations | `GET /health` — phase, live integrations, persistence · `cargo run --bin migrate` applies migrations without booting |
 
 The SSE event contract is `FieldEvent` in `src/events/sse.rs`, mirrored by TypeScript types in `web/static/types/`.
