@@ -13,11 +13,7 @@ pub async fn build(api_key: &str, model_name: &str) -> anyhow::Result<Arc<dyn ad
 Invent 3 small delightful outputs the user might like: e.g. weekend playlist theme,
 3 logo sketch ideas, a short trip shortlist. One line each."#,
         )
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.7),
-            max_output_tokens: Some(512),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.7, 512))
         .build()?;
 
     Ok(Arc::new(agent))

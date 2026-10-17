@@ -41,11 +41,7 @@ async fn stay_agent(
             )
             .toolset(tools)
             .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.3),
-                max_output_tokens: Some(4096),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.3, 4096))
             .build()?;
         return Ok(Arc::new(agent));
     }
@@ -81,11 +77,7 @@ async fn planner_agent(
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.35),
-            max_output_tokens: Some(4096),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.35, 4096))
         .build()?;
     Ok(Arc::new(agent))
 }

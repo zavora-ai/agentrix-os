@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use adk_core::Llm;
+use adk_core::{GenerateContentConfig, Llm};
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig, Effort};
 use adk_model::gemini::GeminiModel;
 
@@ -32,6 +32,25 @@ pub fn allows_sampling(model: &str) -> bool {
 /// Output ceiling for text agents on Anthropic. The API requires an explicit
 /// value and the adk default (4096) truncates a long synthesis.
 const ANTHROPIC_MAX_TOKENS: u32 = 16_000;
+
+/// Generation settings for a text agent. Every `LlmAgentBuilder` goes through this.
+///
+/// `temperature` is sent only where the model accepts it ([`allows_sampling`]); adk-model rejects
+/// explicit sampling for Claude 5-generation models before the request leaves the process.
+/// On Anthropic, `max_tokens` also bounds the always-on adaptive thinking, so a cap sized for the
+/// visible text (256–1024) can end the turn before any text is written: Anthropic gets at least
+/// [`ANTHROPIC_MAX_TOKENS`]. Brevity comes from the instruction, not the cap.
+pub fn content_config(model: &str, temperature: f32, max_output_tokens: i32) -> GenerateContentConfig {
+    let max_output_tokens = match provider_for(model) {
+        Provider::Anthropic => max_output_tokens.max(ANTHROPIC_MAX_TOKENS as i32),
+        Provider::Gemini => max_output_tokens,
+    };
+    GenerateContentConfig {
+        temperature: allows_sampling(model).then_some(temperature),
+        max_output_tokens: Some(max_output_tokens),
+        ..Default::default()
+    }
+}
 
 /// Which key and model drive the text agents, resolved from what is configured.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +134,70 @@ mod tests {
     fn claude_models_reject_sampling_gemini_accepts() {
         assert!(!allows_sampling("claude-fable-5-1"));
         assert!(allows_sampling("gemini-3.1-flash-lite"));
+    }
+
+    #[test]
+    fn content_config_drops_sampling_for_claude_and_keeps_it_for_gemini() {
+        let c = content_config("claude-fable-5-1", 0.35, 512);
+        assert!(c.temperature.is_none() && c.top_p.is_none() && c.top_k.is_none());
+        assert_eq!(c.max_output_tokens, Some(ANTHROPIC_MAX_TOKENS as i32));
+        assert_eq!(content_config("claude-fable-5-1", 0.2, 32_768).max_output_tokens, Some(32_768));
+
+        let g = content_config("gemini-3.1-flash-lite", 0.35, 512);
+        assert_eq!(g.temperature, Some(0.35));
+        assert_eq!(g.max_output_tokens, Some(512));
+    }
+
+    fn rust_sources(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read src dir").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let src = std::fs::read_to_string(&path).expect("read source");
+                out.push((path.display().to_string(), src));
+            }
+        }
+    }
+
+    /// Agents are returned as `Arc<dyn Agent>`, so their config cannot be read back. Instead,
+    /// every `LlmAgentBuilder` in `src/` must take its config from `content_config`; each call's
+    /// arguments are then built for `claude-fable-5-1` and must carry no sampling parameters.
+    #[test]
+    fn every_agent_config_omits_sampling_for_claude_fable() {
+        let mut files = Vec::new();
+        rust_sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+
+        let mut builders = 0;
+        let mut calls: Vec<(String, f32, i32)> = Vec::new();
+        for (path, src) in &files {
+            if path.ends_with("src/llm.rs") {
+                continue;
+            }
+            for needle in ["GenerateContentConfig {", ".temperature(", ".top_p(", ".top_k("] {
+                assert!(!src.contains(needle), "{path} sets `{needle}` directly; use llm::content_config");
+            }
+            let built = src.matches("LlmAgentBuilder::new").count();
+            let configured = src.matches(".generate_content_config(crate::llm::content_config(").count();
+            assert_eq!(built, configured, "{path}: every LlmAgentBuilder takes llm::content_config");
+            builders += built;
+            for rest in src.split("crate::llm::content_config(").skip(1) {
+                let args: Vec<&str> = rest.split(')').next().unwrap_or("").split(',').map(str::trim).collect();
+                let temperature = args.get(1).and_then(|t| t.parse().ok()).unwrap_or_else(|| panic!("{path}: temperature literal"));
+                let max_tokens = args.get(2).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{path}: max_output_tokens literal"));
+                calls.push((path.clone(), temperature, max_tokens));
+            }
+        }
+        assert!(builders >= 20, "found only {builders} agent builders under src/");
+
+        for (path, temperature, max_tokens) in &calls {
+            let c = content_config("claude-fable-5-1", *temperature, *max_tokens);
+            assert!(
+                c.temperature.is_none() && c.top_p.is_none() && c.top_k.is_none(),
+                "{path}: sampling sent to claude-fable-5-1"
+            );
+            assert!(c.max_output_tokens.unwrap_or(0) >= ANTHROPIC_MAX_TOKENS as i32, "{path}");
+        }
     }
 
     #[test]

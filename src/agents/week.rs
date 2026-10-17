@@ -122,11 +122,7 @@ async fn money_agent(
             )
             .toolset(tools)
             .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.2),
-                max_output_tokens: Some(4096),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.2, 4096))
             .build()?;
         return Ok(Arc::new(agent));
     }
@@ -156,11 +152,7 @@ async fn focus_agent(
             )
             .toolset(tools)
             .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.25),
-                max_output_tokens: Some(4096),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.25, 4096))
             .build()?;
         return Ok(Arc::new(agent));
     }

@@ -27,11 +27,7 @@ Rules:
 - Do not mention integrations, APIs, MCP, or JSON.
 - Output ONLY the greeting body — no salutation prefix (the system adds time-of-day salutation)."#,
         )
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.25),
-            max_output_tokens: Some(256),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.25, 256))
         .build()?;
 
     Ok(Arc::new(agent))

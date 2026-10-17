@@ -83,12 +83,7 @@ pub async fn build(
         .tool(Arc::new(compose))
         .tool(crate::memory::tools::read_memory_tool("mother"))
         .tool(crate::memory::tools::propose_memory_tool("mother"))
-        .generate_content_config(adk_core::GenerateContentConfig {
-            // Claude 5-generation models reject explicit sampling; Gemini keeps 0.3.
-            temperature: crate::llm::allows_sampling(model_name).then_some(0.3),
-            max_output_tokens: Some(1024),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.3, 1024))
         .build()?;
 
     Ok(Arc::new(agent))
