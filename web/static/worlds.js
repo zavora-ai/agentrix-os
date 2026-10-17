@@ -19,13 +19,14 @@
     t.dataset.agent = a.phase1_agents?.[0] || '';
     t.title = a.mission + (a.stub ? ' — labeled stub until its integration exists' : '');
     const small = a.stub ? 'labeled stub' : `${MODE_ICON[a.mode] || ''} ${a.mode}`.trim();
-    t.innerHTML = `<div class="av">${a.glyph}</div><div class="who">${a.title}<small>${small}</small></div>`;
+    const { esc } = window.AgentrixHtml;
+    t.innerHTML = `<div class="av">${esc(a.glyph)}</div><div class="who">${esc(a.title)}<small>${esc(small)}</small></div>`;
     t.addEventListener('click', () => {
       const input = document.getElementById('intent');
       if (!input) return;
       input.value = a.prompt;
       input.focus();
-      window.__AGENTRIX_UI__?.showSuzyCustom?.(`${a.glyph} <b>${a.title}</b> — ${a.mission} Press ⏎ to ask.`);
+      window.__AGENTRIX_UI__?.showSuzyCustom?.(`${esc(a.glyph)} <b>${esc(a.title)}</b> — ${esc(a.mission)} Press ⏎ to ask.`);
     });
     return t;
   }

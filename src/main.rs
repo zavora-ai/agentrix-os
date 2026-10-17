@@ -29,7 +29,6 @@ use adk_session::{CreateRequest, InMemorySessionService};
 use axum::middleware::from_fn;
 use axum::routing::{delete, get, post};
 use axum::{Extension, Router};
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 #[tokio::main]
@@ -44,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
+    config.check_secrets()?;
     spatial_os::tools::allowlist::init(&config.mcp_allowlists_toml)?;
     if let Err(e) = spatial_os::tools::registry::try_sync(&config, spatial_os::tools::allowlist::catalog()).await {
         tracing::warn!("mcp-registry sync skipped ({e:#})");
@@ -74,10 +74,11 @@ async fn main() -> anyhow::Result<()> {
     let (session_service, session_store, auth_state, pg_pool) = boot_persistence(&config).await?;
 
     // Permission gate services (S2): ledger, modes, pending actions, audit. Installed before any
-    // agent is built so every gated tool shares the same stores as the HTTP routes.
-    let ledger_key = std::env::var("LEDGER_HASH_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    // agent is built so every gated tool shares the same stores as the HTTP routes. The dev key
+    // is only reachable without Postgres (`check_secrets`), where the ledger is in-memory.
+    let ledger_key = config
+        .ledger_hash_key
+        .clone()
         .unwrap_or_else(|| "agentrix-ledger-dev-key".into())
         .into_bytes();
     let services = match pg_pool.clone() {
@@ -88,9 +89,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("permission services were already initialized — keeping the existing instance");
     }
     // Personal memory (S3): known · assumed · recommended, sensitive values encrypted at rest.
+    // With Postgres, `check_secrets` has already required a real MEMORY_MASTER_KEY.
     let memory = spatial_os::memory::MemoryService::new(
         pg_pool.clone(),
-        spatial_os::memory::crypto::Crypto::from_env_or_dev(),
+        match config.memory_master_key.as_deref() {
+            Some(key) => spatial_os::memory::crypto::Crypto::from_master(key),
+            None => spatial_os::memory::crypto::Crypto::from_env_or_dev(),
+        },
     );
     if spatial_os::memory::init(memory).is_err() {
         tracing::warn!("memory service was already initialized — keeping the existing instance");
@@ -478,8 +483,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/awp/a2a", post(routes::intent::a2a_intent))
         .with_state(app_state)
         .merge(awp_router(awp_state))
-        .layer(from_fn(version_negotiation))
-        .layer(CorsLayer::very_permissive());
+        .layer(from_fn(version_negotiation));
+
+    let api = match routes::cors_layer(&config.cors_allowed_origins) {
+        Some(cors) => {
+            tracing::info!(origins = ?config.cors_allowed_origins, "CORS enabled for extra origins");
+            api.layer(cors)
+        }
+        None => api,
+    };
 
     let mut app = api.layer(Extension(session_store));
 
@@ -895,11 +907,16 @@ async fn boot_persistence(
             google_client_id: config.google_oauth_client_id.clone(),
             google_client_secret: config.google_oauth_client_secret.clone(),
             base_url: config.base_url.clone(),
+            dev_login: config.dev_login_enabled(),
+            owner_emails: config.owner_emails.clone(),
         })
     });
 
     if auth_state.is_some() {
         tracing::info!("Google OAuth + JWT auth enabled");
+        if config.owner_emails.is_empty() {
+            tracing::warn!("AGENTRIX_OWNER_EMAILS unset — every sign-in is refused (ADR-005: one owner per instance)");
+        }
     }
 
     Ok((session_service, session_store, auth_state, Some(pool)))

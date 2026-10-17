@@ -198,6 +198,13 @@ method = "GET"
 access_level = "anonymous"
 
 [[capabilities]]
+name = "set_dnd"
+description = "Turn Do Not Disturb on or off for the proactive agents (research, scout, maker)"
+endpoint = "/api/ambient/dnd"
+method = "POST"
+access_level = "known"
+
+[[capabilities]]
 name = "get_people"
 description = "People rail tiles from Slack when connected; honest empty state otherwise"
 endpoint = "/api/people"

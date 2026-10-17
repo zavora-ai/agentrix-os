@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::orchestrator::dispatch::{dispatch_action, ActionDispatch};
+use crate::routes::actions::owned_session;
 use crate::scenarios;
 use crate::state::AppState;
 
@@ -34,8 +35,9 @@ pub async fn submit_action(
         return resp;
     }
 
-    let Some(record) = state.sessions.get(&session_id).await else {
-        return (StatusCode::NOT_FOUND, "session not found").into_response();
+    let record = match owned_session(&state, &headers, &session_id).await {
+        Ok(record) => record,
+        Err(resp) => return resp,
     };
 
     let action = scenarios::pick_action(&body.text).unwrap_or("handle");

@@ -13,7 +13,9 @@ async fn main() -> anyhow::Result<()> {
     let url = std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
     let pool = spatial_os::db::connect(&url).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    let ledger = LedgerService::new(Some(pool), std::env::var("LEDGER_HASH_KEY").unwrap_or_else(|_| "agentrix-ledger-dev-key".into()).into_bytes());
+    let hash_key = std::env::var("LEDGER_HASH_KEY").ok();
+    spatial_os::config::require_secret("LEDGER_HASH_KEY", hash_key.as_deref())?;
+    let ledger = LedgerService::new(Some(pool), hash_key.unwrap_or_default().into_bytes());
 
     let file = std::fs::File::open(&path)?;
     let mut events = Vec::new();

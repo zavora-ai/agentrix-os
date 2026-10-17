@@ -3,9 +3,9 @@
 //! calls out (M10-T5, `crate::voice::camera`).
 
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws},
-    http::HeaderMap,
-    response::IntoResponse,
+    extract::{Query, State, WebSocketUpgrade, ws, ws::rejection::WebSocketUpgradeRejection},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use base64::Engine as _;
@@ -18,6 +18,10 @@ use adk_realtime::events::ServerEvent;
 
 use crate::state::AppState;
 use crate::voice::health::{SessionEnd, classify_disconnect};
+
+/// Largest websocket message accepted: a camera frame at its cap plus JSON framing. Mic audio
+/// chunks are a few KiB.
+const MAX_WS_MESSAGE_BYTES: usize = 2 * crate::voice::camera::MAX_FRAME_BASE64_BYTES;
 
 #[derive(Serialize)]
 pub struct VoiceStatus {
@@ -54,17 +58,36 @@ pub struct VoiceWsQuery {
 }
 
 pub async fn ws_voice(
-    ws: WebSocketUpgrade,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<VoiceWsQuery>,
-) -> impl IntoResponse {
-    let user = state
-        .auth
-        .as_ref()
-        .and_then(|a| crate::auth::extract_user_id(&headers, &a.jwt_secret))
-        .map(|u| u.to_string());
-    ws.on_upgrade(move |socket| handle_voice_ws(socket, state, query.session_id, user))
+) -> Response {
+    // CORS does not cover websockets and browsers attach cookies to cross-site handshakes, so a
+    // page on another origin could otherwise drive Suzy (cross-site websocket hijacking).
+    // Non-browser clients send no Origin and still go through the AWP gate below.
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        let allowed = origin
+            .to_str()
+            .is_ok_and(|o| crate::config::origin_allowed(o, &state.voice.allowed_origins));
+        if !allowed {
+            warn!("voice websocket refused: origin not allowed");
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+    }
+    let key = format!("voice:{}", crate::awp_gate::client_key(&headers, "direct"));
+    if let Err(resp) = state.awp.check(&headers, &key, "stream_voice").await {
+        return resp;
+    }
+    let user = state.awp.user_id(&headers).map(|u| u.to_string());
+    match ws {
+        Ok(ws) => ws
+            .max_message_size(MAX_WS_MESSAGE_BYTES)
+            .max_frame_size(MAX_WS_MESSAGE_BYTES)
+            .on_upgrade(move |socket| handle_voice_ws(socket, state, query.session_id, user))
+            .into_response(),
+        Err(rejection) => rejection.into_response(),
+    }
 }
 
 /// The UI session this voice session belongs to — the id the client keeps and submits intents

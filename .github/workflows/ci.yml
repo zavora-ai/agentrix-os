@@ -63,7 +63,7 @@ jobs:
           proactive_mock mcp_allowlist health_exposes
           postgres_schema ui_session_persists pg_agent_session
           domain_ intake_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_
-          consent_ tasks_ s7_
+          consent_ tasks_ s7_ security_
 
       - name: cargo test (live — optional secrets)
         if: env.GOOGLE_API_KEY != ''

@@ -4,7 +4,8 @@
 //! Usage: `DATABASE_URL=… cargo run --bin run_baseline -- [user_id] [as_of YYYY-MM-DD]`
 //! Defaults: the synthetic user from `scripts/synth_ledger.py`, as_of = today (UTC).
 //! `INTELLIGENCE_UTC_OFFSET_HOURS` (default 0) sets the day boundary, e.g. `3` for Nairobi.
-//! `LEDGER_HASH_KEY` is read as in `main.rs` so the observation's ledger row uses the same key.
+//! `LEDGER_HASH_KEY` is required (as by the server in Postgres mode) so the observation's ledger
+//! row uses the same key.
 
 use chrono::{Duration, FixedOffset, NaiveDate, Utc};
 use spatial_os::intelligence::{baseline, patterns, store, LedgerService};
@@ -23,8 +24,9 @@ async fn main() -> anyhow::Result<()> {
     let url = std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
     let pool = spatial_os::db::connect(&url).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    let hash_key = std::env::var("LEDGER_HASH_KEY").unwrap_or_else(|_| "agentrix-ledger-dev-key".into()).into_bytes();
-    let ledger = LedgerService::new(Some(pool.clone()), hash_key);
+    let hash_key = std::env::var("LEDGER_HASH_KEY").ok();
+    spatial_os::config::require_secret("LEDGER_HASH_KEY", hash_key.as_deref())?;
+    let ledger = LedgerService::new(Some(pool.clone()), hash_key.unwrap_or_default().into_bytes());
 
     let cfg = baseline::Config::default();
     let from = as_of - Duration::days(cfg.window_days + cfg.recent_days + 7);

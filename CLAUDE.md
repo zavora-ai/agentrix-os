@@ -49,7 +49,7 @@ cargo test --test validate -- awp_gate business_toml mock_deck combine_action ke
   artifact_paths session_store voice_state greeting_brand background_cards ambient_store \
   tour_prompts proactive_mock mcp_allowlist health_exposes \
   domain_ intake_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_ \
-  consent_ tasks_ s7_                    # same list as CI; DB-backed ones return early without DATABASE_URL
+  consent_ tasks_ s7_ security_          # same list as CI; DB-backed ones return early without DATABASE_URL
 cargo test --test validate -- gemini_ router_agent suzy_agent                             # needs GOOGLE_API_KEY
 cargo test --test validate -- postgres_schema ui_session_persists pg_agent_session        # needs DATABASE_URL
 cargo test --test validate deck_workflow_writes_three_artifacts -- --ignored              # full E2E, slow

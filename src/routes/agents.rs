@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::routes::actions::owned_session;
 use crate::state::{AgentRecord, AppState};
 
 #[derive(Serialize)]
@@ -34,6 +35,7 @@ pub async fn list_agents(
         .await
         .map_err(|r| r)?;
 
+    owned_session(&state, &headers, &session_id).await?;
     let Some((active, resting)) = state.sessions.list_agents(&session_id).await else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };
@@ -53,9 +55,7 @@ pub async fn snooze_agent(
         .await
         .map_err(|r| r)?;
 
-    if !state.sessions.get(&body.session_id).await.is_some() {
-        return Err(StatusCode::NOT_FOUND.into_response());
-    }
+    owned_session(&state, &headers, &body.session_id).await?;
     let glyph = body.glyph.unwrap_or_else(|| "💤".into());
     let agent_name = body.agent.unwrap_or_else(|| agent_id.clone());
     state
@@ -92,6 +92,7 @@ pub async fn wake_agent(
         .await
         .map_err(|r| r)?;
 
+    owned_session(&state, &headers, &body.session_id).await?;
     let Some(agent) = state.sessions.agent_wake(&body.session_id, &agent_id).await else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };

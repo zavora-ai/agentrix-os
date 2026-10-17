@@ -6,7 +6,6 @@ use axum::{
 };
 
 use crate::artifacts;
-use crate::auth;
 use crate::state::AppState;
 
 #[derive(serde::Deserialize)]
@@ -36,12 +35,10 @@ async fn authorize(
     if record.user_id != user_id {
         return Err(StatusCode::FORBIDDEN);
     }
-    if let Some(auth) = &state.auth {
-        if let Some(jwt_user) = auth::extract_user_id(headers, &auth.jwt_secret) {
-            if jwt_user.to_string() != user_id {
-                return Err(StatusCode::FORBIDDEN);
-            }
-        }
+    if let Some(jwt_user) = state.awp.user_id(headers)
+        && jwt_user.to_string() != user_id
+    {
+        return Err(StatusCode::FORBIDDEN);
     }
     Ok(())
 }
