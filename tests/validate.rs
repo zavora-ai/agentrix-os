@@ -1688,6 +1688,8 @@ async fn pending_actions_approve_runs_once_under_races() {
 
 #[tokio::test]
 async fn permission_routes_set_mode_and_pause() {
+    // Pause is process-wide: serialize with the gate tests that assert on it.
+    let _serial = gate_lock().lock().await;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use spatial_os::domain::Domain;
@@ -2171,13 +2173,15 @@ async fn consent_routes_get_and_put_require_known_trust() {
     assert!(read(res).await["consents"][0]["revoked_at"].is_string());
 }
 
-/// Needs `DATABASE_URL` (CI service container or `docker compose up -d`).
+/// Uses `DATABASE_URL` when it answers (CI service container or `docker compose up -d`).
 #[tokio::test]
 async fn consent_pg_roundtrip_persists_grant_and_revocation() {
     use spatial_os::domain::Domain;
     use spatial_os::memory::consent::ConsentStore;
 
-    let pool = common::postgres_pool().await;
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
     let user = format!("u-consent-pg-{}", uuid::Uuid::new_v4());
 
@@ -2476,13 +2480,15 @@ fn tasks_and_consents_capabilities_require_known_trust() {
     }
 }
 
-/// Needs `DATABASE_URL` (CI service container or `docker compose up -d`).
+/// Uses `DATABASE_URL` when it answers (CI service container or `docker compose up -d`).
 #[tokio::test]
 async fn tasks_pg_roundtrip_and_sprint_a_migrations() {
     use spatial_os::domain::Domain;
     use spatial_os::tools::tasks::{NewTask, Priority, TaskKind, TaskStore};
 
-    let pool = common::postgres_pool().await;
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
 
     let tables: Vec<(String,)> =
@@ -2619,11 +2625,9 @@ async fn s7_store_roundtrip_daily_baselines_observation() {
     use spatial_os::intelligence::baseline::{evaluate, Config};
     use spatial_os::intelligence::patterns::aggregate;
     use spatial_os::intelligence::store;
-    common::load_env();
-    if std::env::var("DATABASE_URL").is_err() {
+    let Some(pool) = common::try_postgres_pool().await else {
         return;
-    }
-    let pool = common::postgres_pool().await;
+    };
     sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
     let user = format!("s7-test-{}", uuid::Uuid::new_v4());
     let mut daily = aggregate(&s7_fixture());

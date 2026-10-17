@@ -19,7 +19,8 @@ and user-owned memory.
 ## Build and run
 
 - **Sibling checkout required.** `Cargo.toml` uses path dependencies on `../adk-rust/*`.
-  Clone `https://github.com/zavora-ai/adk-rust` next to this repo before `cargo` anything.
+  Clone `https://github.com/zavora-ai/adk-rust` next to this repo before `cargo` anything, and
+  check out the commit CI builds against (`ADK_RUST_REF` in `.github/workflows/ci.yml`).
 - `cp .env.example .env && cargo run` → http://localhost:9847. Add `?demo=1` for the offline,
   scripted UI (no server events). Keep demo mode working; marketing captures depend on it.
 - Text agents run on `TEXT_MODEL` (default `claude-fable-5-1`, needs `ANTHROPIC_API_KEY`) via
@@ -31,34 +32,43 @@ and user-owned memory.
 - MCP servers are separate binaries built from the `mcp-servers` monorepo; paths are the
   `MCP_*_PATH` variables in `.env.example`. Postgres for local dev: `docker compose up -d`
   (port 5434); migrations run at boot via `sqlx::migrate!`.
+- **Deployed binaries need their paths.** Web assets, `business.toml` and `mcp_allowlists.toml`
+  default to the source checkout the binary was built from. Anywhere else set `AGENTRIX_ROOT`
+  (base for every relative path) or `WEB_DIR`, `BUSINESS_TOML`, `MCP_ALLOWLISTS_TOML`; the
+  Dockerfile sets them to `/app`, and CI boots the image and curls `/health`.
 - **A shell-exported `GOOGLE_API_KEY` wins over `.env`.** dotenv never overrides a variable that
   is already set, so a stale `export GOOGLE_API_KEY=…` in `~/.zshrc` makes the server and the
   live tests use that key while `.env` says otherwise (symptom: `API key not valid` from Gemini
   although `curl` with the `.env` key works). Run `unset GOOGLE_API_KEY` first, or pass
   `GOOGLE_API_KEY=$(grep '^GOOGLE_API_KEY=' .env | cut -d= -f2) cargo run`.
-- **adk-rust drift.** adk-rust `main` moves fast. As of 2026-09-19 this repo's `main` does not
-  compile against it (rmcp 3, `AwpState::builder`, rate-limiter signature). The fix is the first
-  commit of PR #2 (`build: track adk-rust main`). If you hit type mismatches in `src/tools/mcp.rs`
-  or `AwpState`, start there rather than pinning rmcp locally.
+- **adk-rust drift.** adk-rust `main` moves fast, so CI pins it (`ADK_RUST_REF`). A local
+  checkout on another commit can rewrite `Cargo.lock`; restore it (`git checkout -- Cargo.lock`)
+  unless you are bumping the pin, and bump the pin and `Cargo.lock` in one commit.
 
 ## Test and lint
 
 ```bash
 cargo test --lib                                  # unit tests (fast, offline)
-cargo test --test validate -- awp_gate business_toml mock_deck combine_action keyword_router \
-  artifact_paths session_store voice_state greeting_brand background_cards ambient_store \
-  tour_prompts proactive_mock mcp_allowlist health_exposes \
-  domain_ intake_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_ \
-  consent_ tasks_ s7_                    # same list as CI; DB-backed ones return early without DATABASE_URL
-cargo test --test validate -- gemini_ router_agent suzy_agent                             # needs GOOGLE_API_KEY
-cargo test --test validate -- postgres_schema ui_session_persists pg_agent_session        # needs DATABASE_URL
+cargo test --test validate -- \
+  awp_gate awp_discovery awp_manifest business_toml mock_deck combine_action keyword_router \
+  artifact_paths session_store session_persistence voice_state greeting_brand \
+  background_cards ambient_store tour_prompts proactive_mock mcp_allowlist health_exposes \
+  people_rail_unavailable commit_creates \
+  domain_ mother_ ledger_ permission_ gate_ pending_ memory_ effects_ \
+  consent_ tasks_ s7_ \
+  work_agents work_stub_agents work_and_home_worlds home_agents bus_carries arbitration_
+  # ^ CI's offline list; consent_pg_*, tasks_pg_* and s7_store_* skip their Postgres part
+  #   unless DATABASE_URL answers (in CI, where CI is set, an unreachable database fails them)
+cargo test --test validate -- postgres_schema ui_session_persists pg_agent_session        # needs DATABASE_URL (CI runs these too)
+cargo test --test validate -- gemini_ router_agent suzy_agent greeting_agent_builds       # needs GOOGLE_API_KEY
 cargo test --test validate deck_workflow_writes_three_artifacts -- --ignored              # full E2E, slow
 cargo clippy --all-targets
-node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/static/gesture-classifier.js)
+node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/static/gesture-classifier.js); in CI
 ```
 
 - **libtest filters are substrings, not regexes.** Pass several names after `--`; a single
-  `'a|b|c'` argument matches nothing (the CI on `main` still has that mistake; PR #2 fixes it).
+  `'a|b|c'` argument matches nothing. A new test whose name no filter matches never runs in CI:
+  name it into an existing group or add a filter to `ci.yml` and the list above.
 - Tests that need secrets or binaries panic with a clear message when they are missing; do not
   add them to the offline group.
 - Keep new code clippy-clean. Warnings that already exist in `greeting/`, `auth.rs`,
@@ -111,8 +121,8 @@ node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/st
 ## Phase 2 — Personal AI OS
 
 Concept `docs/PERSONAL_AI_OS.md`, plan `docs/SPRINT_PLAN.md` (13 sprints, S0–S12, four releases),
-decisions in `docs/adr/`. Release R1 (S0–S3) is in **PR #2** on branch `phase2/r1-foundation`.
-Once it merges, these rules apply in addition to the ones above:
+decisions in `docs/adr/`. Release R1 (S0–S3) merged in PR #2. These rules apply in addition to
+the ones above:
 
 - **Domain on everything** (ADR-002). `Domain { Work, Home, Shared }` tags cards, agents,
   `card_spawn`, ledger rows, memory items and pending actions. `Shared` is the backward-compatible
@@ -148,8 +158,10 @@ Once it merges, these rules apply in addition to the ones above:
   user as `anonymous`, so gate tests serialize on `gate_lock()`. Use the `offline_app_state()`
   and `known_app_state()` fixtures in `tests/validate.rs` for handler tests. Ledger in-memory
   writes are synchronous; only Postgres inserts are async (`ledger.flush()` waits for them).
-- **Next sprints:** S4 Work World (`work_mother`, tasks store), S5 Home World (family, personal
-  productivity, separate identity), S6 agent bus + daily briefing. Use the task ids from
+- **Where we are:** S4 Work World (PR #5), S5 Home World (PR #7), S6 agent bus and arbitration
+  (PR #8) and S7 patterns and baseline (PR #10) are merged. Next: the S6 tail (briefing route,
+  journeys), S7 observations (phrasing, jobs, API) and S8 balance and conflicts; owners and team
+  sprints are in `docs/PROGRESS.md`, which also reserves migration numbers. Use the task ids from
   `SPRINT_PLAN.md` (for example `S4-T3`) in commit messages and PR descriptions.
 
 ## Delivery ritual

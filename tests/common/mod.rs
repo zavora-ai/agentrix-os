@@ -75,3 +75,24 @@ pub async fn postgres_pool() -> sqlx::PgPool {
         .await
         .expect("postgres connect failed — is spatial-os-postgres running on 5434?")
 }
+
+/// A pool for tests in the offline group that also exercise Postgres: `None` (the test returns
+/// early) when `DATABASE_URL` is unset or nothing answers there, e.g. a `.env` pointing at the
+/// Compose database while Docker is down. In CI (`CI` set) an unreachable database is a failure.
+pub async fn try_postgres_pool() -> Option<sqlx::PgPool> {
+    load_env();
+    let url = std::env::var("DATABASE_URL").ok().filter(|u| !u.trim().is_empty())?;
+    let connected = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&url)
+        .await;
+    match connected {
+        Ok(pool) => Some(pool),
+        Err(e) if std::env::var_os("CI").is_some() => panic!("DATABASE_URL is set but unreachable in CI: {e}"),
+        Err(e) => {
+            eprintln!("skipping Postgres part: DATABASE_URL unreachable ({e})");
+            None
+        }
+    }
+}
