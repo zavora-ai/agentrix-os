@@ -2839,3 +2839,66 @@ async fn work_and_home_worlds_route_lists_both_rosters() {
     let cap = ctx.capabilities.iter().find(|c| c.name == "get_worlds").expect("get_worlds capability");
     assert_eq!(cap.access_level, awp_types::TrustLevel::Anonymous);
 }
+
+// ---------------------------------------------------------------------------
+// Security — sign-in, identity, transport and secrets (review 2026-10-17)
+// ---------------------------------------------------------------------------
+
+/// `AuthState` for handler tests. The pool never connects: every case here is refused before
+/// the handler touches the database.
+fn security_auth_state(dev_login: bool) -> Arc<spatial_os::auth::AuthState> {
+    Arc::new(spatial_os::auth::AuthState {
+        db: sqlx::PgPool::connect_lazy("postgres://offline@127.0.0.1:1/offline").expect("lazy pool"),
+        jwt_secret: "security-test-secret-at-least-32-bytes".into(),
+        google_client_id: None,
+        google_client_secret: None,
+        base_url: "http://127.0.0.1:9847".into(),
+        dev_login,
+    })
+}
+
+#[tokio::test]
+async fn security_dev_login_needs_explicit_opt_in() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    let res = spatial_os::auth::dev_login(
+        State(security_auth_state(false)),
+        axum::Json(spatial_os::auth::DevLoginRequest { email: Some("victim@example.com".into()) }),
+    )
+    .await
+    .into_response();
+    assert_eq!(res.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(res.headers().get(axum::http::header::SET_COOKIE).is_none(), "no session cookie without the opt-in");
+
+    let providers = spatial_os::auth::providers(State(security_auth_state(false))).await;
+    assert!(!providers.0.dev, "the UI must not offer dev sign-in when it is off");
+    let providers = spatial_os::auth::providers(State(security_auth_state(true))).await;
+    assert!(providers.0.dev);
+}
+
+#[test]
+fn security_dev_login_only_on_loopback() {
+    use spatial_os::config::is_loopback_host;
+
+    for h in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.1.1"] {
+        assert!(is_loopback_host(h), "{h} is loopback");
+    }
+    for h in ["0.0.0.0", "192.168.1.10", "os.zavora.example", "", "localhost.evil.example"] {
+        assert!(!is_loopback_host(h), "{h} is not loopback");
+    }
+
+    common::load_env();
+    let mut config = AppConfig::from_env().expect("config");
+    config.host = "127.0.0.1".into();
+    config.base_url = "http://localhost:9847".into();
+    config.dev_login = false;
+    assert!(!config.dev_login_enabled(), "off by default");
+    config.dev_login = true;
+    assert!(config.dev_login_enabled());
+    config.host = "0.0.0.0".into();
+    assert!(!config.dev_login_enabled(), "refused on a public bind address");
+    config.host = "127.0.0.1".into();
+    config.base_url = "https://os.zavora.example".into();
+    assert!(!config.dev_login_enabled(), "refused behind a public URL (reverse proxy)");
+}

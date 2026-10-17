@@ -894,6 +894,7 @@ async fn boot_persistence(
             google_client_id: config.google_oauth_client_id.clone(),
             google_client_secret: config.google_oauth_client_secret.clone(),
             base_url: config.base_url.clone(),
+            dev_login: config.dev_login_enabled(),
         })
     });
 

@@ -48,6 +48,9 @@ pub struct AppConfig {
     pub allow_demo_mode: bool,
     /// `AGENTRIX_CAMERA` (default on): camera frames over the voice websocket when voice is enabled.
     pub camera_enabled: bool,
+    /// `AGENTRIX_DEV_LOGIN` (default off): `POST /api/auth/dev` signs in without Google. Honoured
+    /// only on a loopback `HOST` and `BASE_URL` — see [`AppConfig::dev_login_enabled`].
+    pub dev_login: bool,
 }
 
 impl AppConfig {
@@ -195,7 +198,31 @@ impl AppConfig {
             camera_enabled: std::env::var("AGENTRIX_CAMERA")
                 .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
                 .unwrap_or(true),
+            dev_login: std::env::var("AGENTRIX_DEV_LOGIN")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         })
+    }
+
+    /// Dev sign-in issues a JWT for whatever email it is given, so it needs the explicit opt-in
+    /// and a server that is only reachable from this machine (bind address and public URL).
+    pub fn dev_login_enabled(&self) -> bool {
+        if !self.dev_login {
+            return false;
+        }
+        let base_host = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default();
+        let local = is_loopback_host(&self.host) && is_loopback_host(&base_host);
+        if !local {
+            tracing::warn!(
+                host = %self.host,
+                base_url = %self.base_url,
+                "AGENTRIX_DEV_LOGIN ignored — dev sign-in is only served on a loopback HOST and BASE_URL"
+            );
+        }
+        local
     }
 
     /// Host portion for AWP discovery (`business.toml` domain override).
@@ -243,6 +270,13 @@ impl AppConfig {
     pub fn voice_enabled(&self) -> bool {
         self.google_api_key.is_some()
     }
+}
+
+/// `localhost`, `127.0.0.0/8` or `::1` (brackets allowed, as in a URL host).
+pub fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 fn resolve_path(manifest_dir: &PathBuf, env_key: &str, default: &str) -> PathBuf {

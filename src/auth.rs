@@ -17,6 +17,8 @@ pub struct AuthState {
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub base_url: String,
+    /// `AppConfig::dev_login_enabled`: explicit opt-in on a loopback-only server.
+    pub dev_login: bool,
 }
 
 #[derive(Serialize)]
@@ -243,7 +245,7 @@ pub async fn providers(State(state): State<Arc<AuthState>>) -> Json<AuthProvider
     let google = state.google_client_id.is_some() && state.google_client_secret.is_some();
     Json(AuthProviders {
         google,
-        dev: !google,
+        dev: state.dev_login && !google,
     })
 }
 
@@ -252,11 +254,19 @@ pub struct DevLoginRequest {
     pub email: Option<String>,
 }
 
-/// Local-only sign-in when Google OAuth is not configured (M9 dev validation).
+/// Local-only sign-in when Google OAuth is not configured (M9 dev validation). Off unless
+/// `AGENTRIX_DEV_LOGIN=true` on a loopback server: it trusts whatever email it is given.
 pub async fn dev_login(
     State(state): State<Arc<AuthState>>,
     Json(body): Json<DevLoginRequest>,
 ) -> impl IntoResponse {
+    if !state.dev_login {
+        return err(
+            StatusCode::NOT_FOUND,
+            "Dev login is off (set AGENTRIX_DEV_LOGIN=true on a loopback HOST and BASE_URL)",
+        )
+        .into_response();
+    }
     if state.google_client_id.is_some() {
         return err(
             StatusCode::NOT_FOUND,
