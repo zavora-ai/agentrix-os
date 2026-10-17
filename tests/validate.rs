@@ -3061,3 +3061,111 @@ async fn security_google_oauth_binds_state_to_the_browser() {
         assert!(!cleared.starts_with(spatial_os::auth::COOKIE_NAME), "no session cookie on a refused callback");
     }
 }
+
+/// CORS used to mirror any origin with credentials. Now: no CORS headers unless the origin is
+/// listed in `CORS_ALLOWED_ORIGINS`.
+#[tokio::test]
+async fn security_cors_is_same_origin_unless_listed() {
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use tower::ServiceExt;
+
+    assert!(spatial_os::routes::cors_layer(&[]).is_none(), "same-origin by default");
+
+    let app = |origins: &[String]| {
+        let router = axum::Router::new().route("/api/auth/me", axum::routing::get(|| async { "me" }));
+        match spatial_os::routes::cors_layer(origins) {
+            Some(cors) => router.layer(cors),
+            None => router,
+        }
+    };
+    let get = |router: axum::Router, origin: &str| {
+        let req = Request::get("/api/auth/me").header(header::ORIGIN, origin).body(Body::empty()).unwrap();
+        async move { router.oneshot(req).await.unwrap() }
+    };
+
+    let res = get(app(&[]), "https://evil.example").await;
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+
+    let listed = vec!["https://app.zavora.example".to_string()];
+    let res = get(app(&listed), "https://evil.example").await;
+    assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "unlisted origins are not mirrored");
+    let res = get(app(&listed), "https://app.zavora.example").await;
+    assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "https://app.zavora.example");
+    assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+}
+
+#[test]
+fn security_origin_check_matches_base_url_and_loopback_only() {
+    use spatial_os::config::{origin_allowed, origin_of};
+
+    assert_eq!(origin_of("https://os.zavora.example/app?x=1").as_deref(), Some("https://os.zavora.example"));
+    assert_eq!(origin_of("http://127.0.0.1:9847").as_deref(), Some("http://127.0.0.1:9847"));
+    assert_eq!(origin_of("not a url"), None);
+
+    let public = vec!["https://os.zavora.example".to_string()];
+    assert!(origin_allowed("https://os.zavora.example", &public));
+    assert!(!origin_allowed("https://evil.example", &public));
+    assert!(!origin_allowed("http://os.zavora.example", &public), "scheme is part of the origin");
+    assert!(!origin_allowed("https://os.zavora.example.evil.example", &public));
+    assert!(!origin_allowed("null", &public));
+
+    let local = vec!["http://127.0.0.1:9847".to_string()];
+    assert!(origin_allowed("http://localhost:9847", &local), "localhost and 127.0.0.1 are one machine");
+    assert!(origin_allowed("http://[::1]:9847", &local));
+    assert!(!origin_allowed("http://localhost:3000", &local), "another local port is another origin");
+    assert!(!origin_allowed("http://rebound.evil.example:9847", &local), "DNS rebinding is not loopback");
+
+    let any = vec!["http://0.0.0.0:9847".to_string()];
+    assert!(origin_allowed("http://localhost:9847", &any), "a wildcard bind still serves this machine");
+    assert!(!origin_allowed("http://0.0.0.0:9847.evil.example", &any));
+}
+
+/// `/ws/voice` checks Origin and the AWP rate limit before the upgrade (CORS does not cover
+/// websockets); `/api/ambient/dnd` needs Known trust like every other setting.
+#[tokio::test]
+async fn security_voice_ws_origin_and_dnd_capability() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let (mut state, known) = known_app_state();
+    state.voice.allowed_origins = vec!["https://os.zavora.example".into()];
+    let app = axum::Router::new()
+        .route("/ws/voice", axum::routing::get(spatial_os::routes::voice::ws_voice))
+        .route("/api/ambient/dnd", axum::routing::post(spatial_os::routes::ambient::set_dnd))
+        .with_state(state.clone());
+
+    let ws = |origin: Option<&str>| {
+        let mut req = Request::get("/ws/voice");
+        if let Some(o) = origin {
+            req = req.header(header::ORIGIN, o);
+        }
+        let app = app.clone();
+        let req = req.body(Body::empty()).unwrap();
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+    assert_eq!(ws(Some("https://evil.example")).await, StatusCode::FORBIDDEN);
+    // Allowed or absent Origin passes the checks; this plain GET then fails the upgrade itself.
+    assert_ne!(ws(Some("https://os.zavora.example")).await, StatusCode::FORBIDDEN);
+    assert_ne!(ws(None).await, StatusCode::FORBIDDEN);
+
+    let dnd = |headers: axum::http::HeaderMap| {
+        let mut req = Request::post("/api/ambient/dnd")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .unwrap();
+        req.headers_mut().extend(headers);
+        let app = app.clone();
+        async move { app.oneshot(req).await.unwrap().status() }
+    };
+    assert_eq!(dnd(axum::http::HeaderMap::new()).await, StatusCode::FORBIDDEN, "anonymous callers cannot silence agents");
+    assert_eq!(dnd(known).await, StatusCode::OK);
+    assert!(state.ambient.snapshot().await.0);
+
+    use adk_awp::BusinessContextLoader;
+    let ctx = BusinessContextLoader::from_file(&common::manifest_dir().join("business.toml")).unwrap().load();
+    let cap = ctx.capabilities.iter().find(|c| c.name == "set_dnd").expect("set_dnd capability");
+    assert_eq!(cap.access_level, awp_types::TrustLevel::Known);
+}

@@ -16,6 +16,8 @@ pub struct VoiceState {
     pub language: Option<String>,
     /// Camera channel (M10-T5): frames over `/ws/voice`, gestures back as `ui_gesture` tool calls.
     pub camera: bool,
+    /// Browser origins `/ws/voice` accepts (`AppConfig::trusted_origins`).
+    pub allowed_origins: Vec<String>,
 }
 
 impl VoiceState {
@@ -27,6 +29,7 @@ impl VoiceState {
                 voice_name: config.voice_name.clone(),
                 language: config.voice_language.clone(),
                 camera: false,
+                allowed_origins: config.trusted_origins(),
             };
         };
 
@@ -42,6 +45,7 @@ impl VoiceState {
             voice_name: config.voice_name.clone(),
             language: config.voice_language.clone(),
             camera: config.camera_enabled,
+            allowed_origins: config.trusted_origins(),
         }
     }
 }

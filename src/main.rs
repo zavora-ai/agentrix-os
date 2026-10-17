@@ -29,7 +29,6 @@ use adk_session::{CreateRequest, InMemorySessionService};
 use axum::middleware::from_fn;
 use axum::routing::{delete, get, post};
 use axum::{Extension, Router};
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 #[tokio::main]
@@ -477,8 +476,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/awp/a2a", post(routes::intent::a2a_intent))
         .with_state(app_state)
         .merge(awp_router(awp_state))
-        .layer(from_fn(version_negotiation))
-        .layer(CorsLayer::very_permissive());
+        .layer(from_fn(version_negotiation));
+
+    let api = match routes::cors_layer(&config.cors_allowed_origins) {
+        Some(cors) => {
+            tracing::info!(origins = ?config.cors_allowed_origins, "CORS enabled for extra origins");
+            api.layer(cors)
+        }
+        None => api,
+    };
 
     let mut app = api.layer(Extension(session_store));
 
