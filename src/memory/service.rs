@@ -177,7 +177,7 @@ impl Scope {
 #[derive(Default)]
 struct Inner {
     items: HashMap<String, Vec<MemoryItem>>,
-    loaded: std::collections::HashSet<String>,
+    loads: crate::db::UserLoads,
 }
 
 #[derive(Clone)]
@@ -214,21 +214,40 @@ impl MemoryService {
         &self.crypto
     }
 
+    /// Load the user's rows on first touch. A database error leaves the user unloaded, so a
+    /// later touch reads again instead of treating an empty list as the truth.
     async fn ensure_loaded(&self, user_id: &str) {
         let Some(pool) = &self.pg else { return };
-        if self.inner.read().await.loaded.contains(user_id) {
+        if !self.inner.read().await.loads.should_load(user_id) {
             return;
         }
-        let rows = load_pg(pool, &self.crypto, user_id).await.unwrap_or_default();
-        let mut guard = self.inner.write().await;
-        guard.items.insert(user_id.to_string(), rows);
-        guard.loaded.insert(user_id.to_string());
+        match load_pg(pool, &self.crypto, user_id).await {
+            Ok(rows) => {
+                let mut guard = self.inner.write().await;
+                if guard.loads.is_loaded(user_id) {
+                    return;
+                }
+                let local = guard.items.remove(user_id).unwrap_or_default();
+                guard.items.insert(user_id.to_string(), merge_loaded(rows, local));
+                guard.loads.succeeded(user_id);
+            }
+            Err(e) => {
+                tracing::warn!("memory_items load failed; retrying on a later request: {e:#}");
+                self.inner.write().await.loads.failed(user_id);
+            }
+        }
     }
 
     async fn persist(&self, item: &MemoryItem) {
         let Some(pool) = &self.pg else { return };
-        if let Err(e) = upsert_pg(pool, &self.crypto, item).await {
-            tracing::warn!("memory_items persist failed: {e:#}");
+        match upsert_pg(pool, &self.crypto, item).await {
+            Ok(0) => tracing::warn!(
+                item = %item.id,
+                "memory_items kept a known row: a {} write did not replace it",
+                item.kind.as_str()
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("memory_items persist failed: {e:#}"),
         }
     }
 
@@ -415,6 +434,21 @@ impl MemoryService {
     }
 }
 
+/// Merge rows read from Postgres with items written in this process while the user's rows
+/// could not be loaded. Those local writes are newer, except that nothing replaces a stored
+/// `known` row but another `known` value (the same rule as the upsert).
+fn merge_loaded(rows: Vec<MemoryItem>, local: Vec<MemoryItem>) -> Vec<MemoryItem> {
+    let mut out = rows;
+    for item in local {
+        match out.iter_mut().find(|r| r.domain == item.domain && r.key == item.key) {
+            Some(row) if row.kind == Kind::Known && item.kind != Kind::Known => {}
+            Some(row) => *row = MemoryItem { id: row.id, created_at: row.created_at, ..item },
+            None => out.push(item),
+        }
+    }
+    out
+}
+
 // ---- Postgres ----
 
 /// The `value` and `provenance` columns as stored. A sensitive item's value is encrypted and
@@ -427,12 +461,16 @@ pub(crate) fn stored_columns(crypto: &Crypto, item: &MemoryItem) -> anyhow::Resu
     Ok((crypto.encrypt(&item.user_id, &item.value)?, serde_json::to_value(provenance)?))
 }
 
-async fn upsert_pg(pool: &PgPool, crypto: &Crypto, item: &MemoryItem) -> anyhow::Result<()> {
+/// Insert or update the row; returns the rows written. 0 means the stored row is `known` and
+/// this write is not: a proposal or recommendation never replaces what the user said, even
+/// when this process could not load that row (a database error or an undecryptable value).
+async fn upsert_pg(pool: &PgPool, crypto: &Crypto, item: &MemoryItem) -> anyhow::Result<u64> {
     let (value, provenance) = stored_columns(crypto, item)?;
-    sqlx::query(
+    let done = sqlx::query(
         "INSERT INTO memory_items (id, user_id, domain, category, key, value, kind, confidence, sensitivity, source_agent, provenance, consent_id, created_at, updated_at, expires_at, deleted_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
-         ON CONFLICT (user_id, domain, key) DO UPDATE SET value = $6, kind = $7, confidence = $8, sensitivity = $9, source_agent = $10, provenance = $11, updated_at = $14, expires_at = $15, deleted_at = $16",
+         ON CONFLICT (user_id, domain, key) DO UPDATE SET value = $6, kind = $7, confidence = $8, sensitivity = $9, source_agent = $10, provenance = $11, updated_at = $14, expires_at = $15, deleted_at = $16 \
+         WHERE memory_items.kind <> 'known' OR EXCLUDED.kind = 'known'",
     )
     .bind(item.id)
     .bind(&item.user_id)
@@ -452,7 +490,7 @@ async fn upsert_pg(pool: &PgPool, crypto: &Crypto, item: &MemoryItem) -> anyhow:
     .bind(item.deleted_at)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(done.rows_affected())
 }
 
 #[derive(sqlx::FromRow)]
@@ -483,14 +521,27 @@ async fn load_pg(pool: &PgPool, crypto: &Crypto, user_id: &str) -> anyhow::Resul
     Ok(rows
         .into_iter()
         .filter_map(|r| {
+            // A row this process cannot read is skipped, never silently: the upsert's `known`
+            // guard keeps a later proposal for the same key from replacing it.
+            let value = match crypto.decrypt(&r.user_id, &r.value) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(item = %r.id, "memory item cannot be decrypted (MEMORY_MASTER_KEY changed?), skipped: {e:#}");
+                    return None;
+                }
+            };
+            let (Some(domain), Some(kind)) = (Domain::parse(&r.domain), Kind::parse(&r.kind)) else {
+                tracing::error!(item = %r.id, "memory item has an unknown domain or kind, skipped");
+                return None;
+            };
             Some(MemoryItem {
                 id: r.id,
-                value: crypto.decrypt(&r.user_id, &r.value).ok()?,
+                value,
                 user_id: r.user_id,
-                domain: Domain::parse(&r.domain)?,
+                domain,
                 category: r.category,
                 key: r.key,
-                kind: Kind::parse(&r.kind)?,
+                kind,
                 confidence: r.confidence,
                 sensitivity: Sensitivity::parse(&r.sensitivity).unwrap_or_default(),
                 source_agent: r.source_agent,
@@ -503,4 +554,51 @@ async fn load_pg(pool: &PgPool, crypto: &Crypto, user_id: &str) -> anyhow::Resul
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(key: &str, kind: Kind, value: &str) -> MemoryItem {
+        let now = Utc::now();
+        MemoryItem {
+            id: Uuid::new_v4(),
+            user_id: "u".into(),
+            domain: Domain::Shared,
+            category: "context".into(),
+            key: key.into(),
+            value: serde_json::json!(value),
+            kind,
+            confidence: None,
+            sensitivity: Sensitivity::Normal,
+            source_agent: "test".into(),
+            provenance: vec![],
+            consent_id: None,
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn memory_merge_after_late_load_never_downgrades_known() {
+        let stored_known = item("profile.city", Kind::Known, "Nairobi");
+        let stored_assumed = item("preference.tone", Kind::Assumed, "brief");
+        let rows = vec![stored_known.clone(), stored_assumed.clone()];
+        let local = vec![
+            item("profile.city", Kind::Assumed, "Lisbon"),
+            item("preference.tone", Kind::Known, "warm"),
+            item("context.new", Kind::Assumed, "x"),
+        ];
+        let merged = merge_loaded(rows, local);
+        assert_eq!(merged.len(), 3);
+        let city = merged.iter().find(|i| i.key == "profile.city").unwrap();
+        assert_eq!((city.kind, city.value.as_str()), (Kind::Known, Some("Nairobi")), "a proposal never replaces a known row");
+        let tone = merged.iter().find(|i| i.key == "preference.tone").unwrap();
+        assert_eq!((tone.kind, tone.value.as_str()), (Kind::Known, Some("warm")), "the user's newer statement wins");
+        assert_eq!(tone.id, stored_assumed.id, "the stored row keeps its id");
+        assert!(merged.iter().any(|i| i.key == "context.new"));
+    }
 }

@@ -70,7 +70,7 @@ pub struct PauseState {
 struct Inner {
     /// user_id → agent_id → setting
     users: HashMap<String, HashMap<String, AgentPermission>>,
-    loaded: std::collections::HashSet<String>,
+    loads: crate::db::UserLoads,
     pause: PauseState,
 }
 
@@ -92,31 +92,41 @@ impl PermissionStore {
         Self::new(None)
     }
 
+    /// Load the user's settings on first touch. A database error leaves the user unloaded so a
+    /// later touch reads again (until then the catalog defaults apply); a setting changed here
+    /// meanwhile is newer than its stored row and wins.
     async fn ensure_loaded(&self, user_id: &str) {
         let Some(pool) = &self.pg else { return };
-        if self.inner.read().await.loaded.contains(user_id) {
+        if !self.inner.read().await.loads.should_load(user_id) {
             return;
         }
-        let rows: Vec<(String, String, serde_json::Value)> = sqlx::query_as(
+        let rows: Vec<(String, String, serde_json::Value)> = match sqlx::query_as(
             "SELECT agent_id, mode, tool_overrides FROM agent_permissions WHERE user_id = $1",
         )
         .bind(user_id)
         .fetch_all(pool)
         .await
-        .unwrap_or_default();
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("agent_permissions load failed; retrying on a later request: {e:#}");
+                self.inner.write().await.loads.failed(user_id);
+                return;
+            }
+        };
         let mut guard = self.inner.write().await;
+        if guard.loads.is_loaded(user_id) {
+            return;
+        }
         let user = guard.users.entry(user_id.to_string()).or_default();
         for (agent_id, mode, overrides) in rows {
-            user.insert(
-                agent_id.clone(),
-                AgentPermission {
-                    agent_id,
-                    mode: Mode::parse(&mode),
-                    tool_overrides: serde_json::from_value(overrides).unwrap_or_default(),
-                },
-            );
+            user.entry(agent_id.clone()).or_insert(AgentPermission {
+                agent_id,
+                mode: Mode::parse(&mode),
+                tool_overrides: serde_json::from_value(overrides).unwrap_or_default(),
+            });
         }
-        guard.loaded.insert(user_id.to_string());
+        guard.loads.succeeded(user_id);
     }
 
     async fn persist(&self, user_id: &str, perm: &AgentPermission) {

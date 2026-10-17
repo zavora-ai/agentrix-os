@@ -2162,6 +2162,67 @@ async fn memory_routes_remember_confirm_export_purge() {
 }
 
 #[tokio::test]
+async fn memory_pg_known_rows_survive_proposals_and_unreadable_rows() {
+    use spatial_os::domain::Domain;
+    use spatial_os::memory::crypto::Crypto;
+    use spatial_os::memory::{Kind, MemoryService, NewItem, Provenance, Scope, Sensitivity};
+
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let user = format!("u-memory-pg-{}", uuid::Uuid::new_v4());
+    let new = |key: &'static str, value: &str, sensitivity| NewItem {
+        domain: Domain::Home,
+        category: "context",
+        key,
+        value: serde_json::json!(value),
+        sensitivity,
+        source_agent: "test",
+        provenance: Provenance::new("user_statement").note("raw statement"),
+    };
+    let row = |key: &'static str| {
+        let pool = pool.clone();
+        let user = user.clone();
+        async move {
+            sqlx::query_as::<_, (String, serde_json::Value, serde_json::Value)>(
+                "SELECT kind, value, provenance FROM memory_items WHERE user_id = $1 AND key = $2",
+            )
+            .bind(&user)
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .expect("row")
+        }
+    };
+
+    let first = MemoryService::new(Some(pool.clone()), Crypto::from_master("pg-test-master"));
+    first.remember(&user, new("context.city", "Nairobi", Sensitivity::Normal)).await;
+    first.remember(&user, new("context.dose", "10mg", Sensitivity::Health)).await;
+    let (_, value, provenance) = row("context.dose").await;
+    assert!(Crypto::is_encrypted(&value), "sensitive value is ciphertext at rest");
+    assert!(!provenance.to_string().contains("raw statement"), "sensitive provenance keeps no note");
+
+    // A restart with another master key cannot read the sensitive row: it is skipped (and
+    // logged), and a proposal for the same key does not replace the known row in Postgres.
+    let rotated = MemoryService::new(Some(pool.clone()), Crypto::from_master("another-master"));
+    let keys: Vec<String> = rotated.read(&user, Scope::MOTHER, None).await.into_iter().map(|i| i.key).collect();
+    assert_eq!(keys, vec!["context.city".to_string()]);
+    rotated.propose(&user, 0.9, new("context.dose", "20mg", Sensitivity::Health)).await;
+    assert_eq!(row("context.dose").await.0, "known", "an assumed write never downgrades a known row");
+
+    // The same through a normal restart: the proposal keeps the known value.
+    let fresh = MemoryService::new(Some(pool.clone()), Crypto::from_master("pg-test-master"));
+    let kept = fresh.propose(&user, 0.9, new("context.city", "Lisbon", Sensitivity::Normal)).await;
+    assert_eq!((kept.kind, kept.value.as_str()), (Kind::Known, Some("Nairobi")));
+    let (kind, value, _) = row("context.city").await;
+    assert_eq!((kind.as_str(), value.as_str()), ("known", Some("Nairobi")));
+    let dose = fresh.read(&user, Scope::MOTHER, Some(&["context.dose".to_string()])).await;
+    assert_eq!(dose[0].value, "10mg");
+    assert_eq!(fresh.purge(&user).await, 2);
+}
+
+#[tokio::test]
 async fn memory_chat_statements_are_handled_by_the_mother() {
     use spatial_os::memory::Kind;
     use spatial_os::orchestrator::dispatch::{dispatch_intent, IntentDispatch};
