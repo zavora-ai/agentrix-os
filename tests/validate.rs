@@ -1782,6 +1782,72 @@ async fn pending_actions_batch_approve_and_reject_via_routes() {
     assert_eq!(app.oneshot(list("bogus")).await.unwrap().status(), StatusCode::BAD_REQUEST);
 }
 
+/// A restart loses nothing the agent said is waiting: open actions are read back per user (list)
+/// and per id (approve, reject, edit), edits and expiry are stored, and the claim stays atomic.
+#[tokio::test]
+async fn pending_pg_actions_survive_a_restart() {
+    use spatial_os::domain::Domain;
+    use spatial_os::permissions::{Effect, PendingActions, PendingStatus, Transition};
+
+    let Some(pool) = common::try_postgres_pool().await else {
+        return;
+    };
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let user = format!("u-pending-pg-{}", uuid::Uuid::new_v4());
+    let status_of = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT status FROM pending_actions WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("row")
+        }
+    };
+
+    let before = PendingActions::new(Some(pool.clone()));
+    let queue = |tool: &'static str| {
+        let before = before.clone();
+        let user = user.clone();
+        async move {
+            before
+                .create(&user, Some("s-1"), "inbox_agent", Domain::Work, tool, Effect::SendExternal, serde_json::json!({"to": "a@b"}), None)
+                .await
+        }
+    };
+    let (edited, approved, stale) = (queue("send_draft").await, queue("send_reply").await, queue("send_old").await);
+    before.edit(edited.id, serde_json::json!({"to": "c@d", "cc": "e@f"})).await.expect("still pending");
+    sqlx::query("UPDATE pending_actions SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
+        .bind(stale.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Restart: the user's open actions come back on the first list, the stale one expires.
+    let after = PendingActions::new(Some(pool.clone()));
+    let open = after.list(&user, Some(PendingStatus::Pending), None).await;
+    let ids: Vec<uuid::Uuid> = open.iter().map(|a| a.id).collect();
+    assert_eq!(ids, vec![edited.id, approved.id]);
+    assert_eq!(open[0].args, serde_json::json!({"to": "c@d", "cc": "e@f"}), "the edit was stored");
+    assert!(open[0].summary.contains("cc"));
+    assert_eq!(status_of(stale.id).await, "expired", "expiry is stored");
+
+    // Another restart, straight to approve/reject by id without a list first.
+    let again = PendingActions::new(Some(pool.clone()));
+    assert_eq!(again.get(approved.id).await.map(|a| a.user_id), Some(user.clone()));
+    assert!(matches!(again.claim(approved.id).await, Transition::Applied(_)));
+    assert_eq!(status_of(approved.id).await, "executing");
+    assert!(matches!(again.claim(approved.id).await, Transition::Conflict(ref c) if c.status == PendingStatus::Executing));
+    // Another instance reading the row while it runs cannot claim it either.
+    let stale_copy = PendingActions::new(Some(pool.clone()));
+    assert!(matches!(stale_copy.claim(approved.id).await, Transition::Conflict(ref c) if c.status == PendingStatus::Executing));
+    again.complete(approved.id, PendingStatus::Approved, Some(serde_json::json!({"ok": true}))).await.expect("completes its claim");
+    assert_eq!(status_of(approved.id).await, "approved");
+    assert!(matches!(again.resolve(edited.id, PendingStatus::Rejected, None).await, Transition::Applied(_)));
+    assert_eq!(status_of(edited.id).await, "rejected");
+    assert!(PendingActions::new(Some(pool)).list(&user, Some(PendingStatus::Pending), None).await.is_empty());
+}
+
 /// Double-clicked approvals, and an approval racing a rejection, run the tool at most once:
 /// the action is claimed (pending → executing) atomically and only the claimant executes it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

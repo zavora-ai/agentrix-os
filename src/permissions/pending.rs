@@ -112,9 +112,13 @@ pub fn summarize(agent_id: &str, tool: &str, effect: Effect, args: &serde_json::
     }
 }
 
+/// Pending actions live in memory and, with Postgres, in `pending_actions`. After a restart a
+/// user's open actions are read back on the first request for that user (or for one action by
+/// id), so an action the agent said is waiting for approval is still there.
 #[derive(Clone)]
 pub struct PendingActions {
     inner: Arc<RwLock<Vec<PendingAction>>>,
+    loads: Arc<RwLock<crate::db::UserLoads>>,
     pg: Option<PgPool>,
     tx: broadcast::Sender<PendingEvent>,
 }
@@ -124,8 +128,64 @@ impl PendingActions {
         let (tx, _) = broadcast::channel(256);
         Self {
             inner: Arc::new(RwLock::new(Vec::new())),
+            loads: Arc::new(RwLock::new(crate::db::UserLoads::default())),
             pg,
             tx,
+        }
+    }
+
+    /// Read the user's open (pending or executing) rows on first touch. A database error leaves
+    /// the user unloaded so a later request reads again.
+    async fn ensure_user_loaded(&self, user_id: &str) {
+        let Some(pool) = &self.pg else { return };
+        if !self.loads.read().await.should_load(user_id) {
+            return;
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            "SELECT * FROM pending_actions WHERE user_id = $1 AND status IN ('pending', 'executing') ORDER BY created_at",
+        )
+        .bind(user_id)
+        .fetch_all(pool)
+        .await;
+        match rows {
+            Ok(rows) => {
+                self.adopt(rows).await;
+                self.loads.write().await.succeeded(user_id);
+            }
+            Err(e) => {
+                tracing::warn!("pending_actions load failed; retrying on a later request: {e:#}");
+                self.loads.write().await.failed(user_id);
+            }
+        }
+    }
+
+    /// Read one action that is not in memory (approve, reject or edit by id after a restart).
+    async fn ensure_id_loaded(&self, id: Uuid) {
+        let Some(pool) = &self.pg else { return };
+        if self.inner.read().await.iter().any(|a| a.id == id) {
+            return;
+        }
+        match sqlx::query_as::<_, Row>("SELECT * FROM pending_actions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(row) => self.adopt(row.into_iter().collect()).await,
+            Err(e) => tracing::warn!("pending_actions lookup failed: {e:#}"),
+        }
+    }
+
+    /// Add stored rows that are not in memory yet; an action already here is the newer copy.
+    async fn adopt(&self, rows: Vec<Row>) {
+        let mut guard = self.inner.write().await;
+        for row in rows {
+            if guard.iter().any(|a| a.id == row.id) {
+                continue;
+            }
+            match row.into_action() {
+                Some(a) => guard.push(a),
+                None => tracing::error!("pending_actions row has an unknown domain, effect or status, skipped"),
+            }
         }
     }
 
@@ -178,11 +238,13 @@ impl PendingActions {
     }
 
     pub async fn get(&self, id: Uuid) -> Option<PendingAction> {
+        self.ensure_id_loaded(id).await;
         self.inner.read().await.iter().find(|a| a.id == id).cloned()
     }
 
     /// List actions for a user, optionally filtered by status and session. Expires stale ones.
     pub async fn list(&self, user_id: &str, status: Option<PendingStatus>, session_id: Option<&str>) -> Vec<PendingAction> {
+        self.ensure_user_loaded(user_id).await;
         self.expire_stale().await;
         self.inner
             .read()
@@ -200,6 +262,7 @@ impl PendingActions {
     /// past `expires_at` becomes Expired instead. With Postgres the claim is also a conditional
     /// `UPDATE … WHERE status = 'pending'`, so a row another instance already took is not run.
     pub async fn claim(&self, id: Uuid) -> Transition {
+        self.ensure_id_loaded(id).await;
         let now = Utc::now();
         let claimed = {
             let mut guard = self.inner.write().await;
@@ -291,6 +354,7 @@ impl PendingActions {
     /// Resolve a still-pending action without running it (reject, or a commit that is its own
     /// approval). A claimed, resolved or expired action is left as it is and reported as a conflict.
     pub async fn resolve(&self, id: Uuid, status: PendingStatus, result: Option<serde_json::Value>) -> Transition {
+        self.ensure_id_loaded(id).await;
         let now = Utc::now();
         let outcome = {
             let mut guard = self.inner.write().await;
@@ -332,13 +396,33 @@ impl PendingActions {
         }
     }
 
-    /// Replace the arguments of a pending action (the "Edit" path) — stays pending.
+    /// Replace the arguments of a pending action (the "Edit" path) — stays pending, and the
+    /// stored row gets the new arguments so an approval after a restart runs the edited call.
     pub async fn edit(&self, id: Uuid, args: serde_json::Value) -> Option<PendingAction> {
-        let mut guard = self.inner.write().await;
-        let action = guard.iter_mut().find(|a| a.id == id && a.status == PendingStatus::Pending)?;
-        action.summary = summarize(&action.agent_id, &action.tool, action.effect, &args);
-        action.args = args;
-        Some(action.clone())
+        self.ensure_id_loaded(id).await;
+        let edited = {
+            let mut guard = self.inner.write().await;
+            let action = guard.iter_mut().find(|a| a.id == id && a.status == PendingStatus::Pending)?;
+            action.summary = summarize(&action.agent_id, &action.tool, action.effect, &args);
+            action.args = args;
+            action.clone()
+        };
+        if let Some(pool) = &self.pg {
+            let updated = sqlx::query("UPDATE pending_actions SET args = $2, summary = $3 WHERE id = $1 AND status = 'pending'")
+                .bind(edited.id)
+                .bind(&edited.args)
+                .bind(&edited.summary)
+                .execute(pool)
+                .await;
+            match updated {
+                Ok(done) if done.rows_affected() == 0 => {
+                    tracing::warn!(action = %edited.id, "pending_actions edit matched no pending row")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("pending_actions edit failed: {e:#}"),
+            }
+        }
+        Some(edited)
     }
 
     pub async fn expire_stale(&self) {
@@ -358,6 +442,47 @@ impl PendingActions {
             self.persist_resolution(&a, "status = 'pending'").await;
             let _ = self.tx.send(PendingEvent::Resolved(a));
         }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct Row {
+    id: Uuid,
+    user_id: String,
+    session_id: Option<String>,
+    agent_id: String,
+    domain: String,
+    tool: String,
+    effect: String,
+    args: serde_json::Value,
+    summary: String,
+    status: String,
+    trace_id: Option<String>,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    resolved_at: Option<DateTime<Utc>>,
+    result: Option<serde_json::Value>,
+}
+
+impl Row {
+    fn into_action(self) -> Option<PendingAction> {
+        Some(PendingAction {
+            id: self.id,
+            user_id: self.user_id,
+            session_id: self.session_id,
+            agent_id: self.agent_id,
+            domain: Domain::parse(&self.domain)?,
+            tool: self.tool,
+            effect: Effect::parse(&self.effect)?,
+            args: self.args,
+            summary: self.summary,
+            status: PendingStatus::parse(&self.status)?,
+            trace_id: self.trace_id,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            resolved_at: self.resolved_at,
+            result: self.result,
+        })
     }
 }
 
