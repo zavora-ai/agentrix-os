@@ -910,6 +910,7 @@ async fn pg_agent_session_roundtrip() {
     use spatial_os::pg_session::PgSessionService;
 
     let pool = common::postgres_pool().await;
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
     let svc = PgSessionService::new(pool);
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -985,6 +986,75 @@ async fn pg_agent_session_events_stay_with_their_app() {
 
     // The id-only path cannot tell the apps apart and refuses rather than guessing.
     assert!(svc.append_event(&session_id, adk_core::Event::new("ambiguous")).await.is_err());
+}
+
+/// State an agent writes (`output_key`, tool state) arrives as `event.actions.state_delta` and
+/// must be there on the next turn's `get`, merged key by key into the session's state. `temp:`
+/// keys live for one invocation and are never stored.
+#[tokio::test]
+async fn pg_agent_session_state_delta_persists() {
+    use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+    use adk_session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
+    use serde_json::json;
+    use spatial_os::pg_session::PgSessionService;
+
+    let pool = common::postgres_pool().await;
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations apply");
+    let svc = PgSessionService::new(pool);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let (writer, bystander) = ("agentrix-router-validate", "agentrix-suzy-validate");
+    let seed = std::collections::HashMap::from([("seed".to_string(), json!("created"))]);
+    for app in [writer, bystander] {
+        svc.create(CreateRequest { app_name: app.into(), user_id: user_id.clone(), session_id: Some(session_id.clone()), state: seed.clone() })
+            .await
+            .expect("create agent session");
+    }
+    let event_with = |delta: serde_json::Value| {
+        let mut event = adk_core::Event::new("state-validate");
+        event.actions.state_delta = serde_json::from_value(delta).unwrap();
+        event
+    };
+    let identity = AdkIdentity::new(
+        AppName::try_from(writer).unwrap(),
+        UserId::try_from(user_id.as_str()).unwrap(),
+        SessionId::try_from(session_id.as_str()).unwrap(),
+    );
+    for delta in [json!({ "topic": "lisbon", "seed": "updated", "temp:scratch": "dropped" }), json!({ "count": 2 })] {
+        svc.append_event_for_identity(AppendEventRequest { identity: identity.clone(), event: event_with(delta) })
+            .await
+            .expect("append event");
+    }
+
+    let get = |app: &str, id: &str| GetRequest { app_name: app.into(), user_id: user_id.clone(), session_id: id.into(), num_recent_events: None, after: None };
+    let state = svc.get(get(writer, &session_id)).await.expect("get agent session").state().all();
+    assert_eq!(state.get("topic"), Some(&json!("lisbon")), "a delta key is stored: {state:?}");
+    assert_eq!(state.get("seed"), Some(&json!("updated")), "a delta overwrites the key it names: {state:?}");
+    assert_eq!(state.get("count"), Some(&json!(2)), "a later delta merges instead of replacing: {state:?}");
+    assert!(!state.contains_key("temp:scratch"), "temp: keys are never stored: {state:?}");
+
+    let untouched = svc.get(get(bystander, &session_id)).await.expect("get agent session").state().all();
+    assert_eq!(untouched, seed, "another app's session with the same id keeps its own state");
+
+    // Concurrent writers of different keys keep each other's values.
+    let writes = (0..8).map(|i| {
+        svc.append_event_for_identity(AppendEventRequest { identity: identity.clone(), event: event_with(json!({ format!("parallel_{i}"): i })) })
+    });
+    for result in futures::future::join_all(writes).await {
+        result.expect("concurrent append");
+    }
+    let state = svc.get(get(writer, &session_id)).await.expect("get agent session").state().all();
+    assert!((0..8).all(|i| state.get(&format!("parallel_{i}")) == Some(&json!(i))), "no concurrent delta is lost: {state:?}");
+    assert_eq!(state.get("topic"), Some(&json!("lisbon")));
+
+    // The id-only path applies the delta too when the id is unambiguous.
+    let lone_id = uuid::Uuid::new_v4().to_string();
+    svc.create(CreateRequest { app_name: writer.into(), user_id: user_id.clone(), session_id: Some(lone_id.clone()), state: Default::default() })
+        .await
+        .expect("create agent session");
+    svc.append_event(&lone_id, event_with(json!({ "via": "id" }))).await.expect("append by id");
+    let state = svc.get(get(writer, &lone_id)).await.expect("get agent session").state().all();
+    assert_eq!(state.get("via"), Some(&json!("id")), "{state:?}");
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@ use adk_core::{
     identity::{AdkIdentity, AppName, SessionId, UserId},
     Event,
 };
-use adk_session::{AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
+use adk_session::{AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService, KEY_PREFIX_TEMP};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -21,11 +21,19 @@ impl PgSessionService {
     /// Append to the session addressed by its full `(app_name, user_id, id)` key. One session id
     /// exists under several app names (`agents::ensure_runner_session` reuses the UI session id
     /// for every runner), so the id alone does not say whose history an event belongs to.
-    async fn append(&self, app_name: &str, user_id: &str, session_id: &str, event: &Event) -> adk_core::Result<()> {
-        let event_json = serde_json::to_value(event).map_err(pg_err)?;
+    ///
+    /// The event's `state_delta` is merged into the session's `state` in the same transaction,
+    /// key by key (`state || delta` against the locked row, so concurrent writers of different
+    /// keys keep each other's values). `temp:` keys are dropped, as in adk-session. `app:` and
+    /// `user:` keys are stored in this session under their prefixed names: there are no app- or
+    /// user-wide state tables, so they are not shared with the user's other sessions.
+    async fn append(&self, app_name: &str, user_id: &str, session_id: &str, mut event: Event) -> adk_core::Result<()> {
+        event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
+        let delta_json = serde_json::to_value(&event.actions.state_delta).map_err(pg_err)?;
+        let event_json = serde_json::to_value(&event).map_err(pg_err)?;
         let mut tx = self.pool.begin().await.map_err(pg_err)?;
-        let touched = sqlx::query("UPDATE agent_sessions SET updated_at = NOW() WHERE app_name = $1 AND user_id = $2 AND id = $3")
-            .bind(app_name).bind(user_id).bind(session_id)
+        let touched = sqlx::query("UPDATE agent_sessions SET state = state || $4, updated_at = NOW() WHERE app_name = $1 AND user_id = $2 AND id = $3")
+            .bind(app_name).bind(user_id).bind(session_id).bind(&delta_json)
             .execute(&mut *tx).await
             .map_err(pg_err)?;
         if touched.rows_affected() == 0 {
@@ -158,7 +166,7 @@ impl SessionService for PgSessionService {
 
     async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_core::Result<()> {
         let id = &req.identity;
-        self.append(id.app_name.as_ref(), id.user_id.as_ref(), id.session_id.as_ref(), &req.event).await
+        self.append(id.app_name.as_ref(), id.user_id.as_ref(), id.session_id.as_ref(), req.event).await
     }
 
     /// Legacy id-only addressing. Appends only when exactly one session has this id; an id
@@ -170,7 +178,7 @@ impl SessionService for PgSessionService {
             .await
             .map_err(pg_err)?;
         match rows.as_slice() {
-            [(app_name, user_id)] => self.append(app_name, user_id, session_id, &event).await,
+            [(app_name, user_id)] => self.append(app_name, user_id, session_id, event).await,
             [] => Err(adk_core::AdkError::not_found(
                 adk_core::ErrorComponent::Session,
                 "pg_session.not_found",
