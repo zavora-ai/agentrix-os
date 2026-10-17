@@ -128,9 +128,43 @@ fn t(world: Domain, agent: &str, task: &str, scenario: &str) -> Target {
     }
 }
 
-fn has_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|n| text.contains(n))
+/// Whether lowercased `text` mentions any of `needles` as whole words or phrases. A plural
+/// `s`/`es` still matches ("trip" → "trips"), a longer word does not ("trip" ≠ "stripe",
+/// "week" ≠ "weekend"). A needle ending in `*` matches as a word prefix ("summar*").
+pub fn mentions(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| mentions_one(text, n))
 }
+
+fn mentions_one(text: &str, needle: &str) -> bool {
+    let (needle, prefix) = match needle.strip_suffix('*') {
+        Some(n) => (n.trim(), true),
+        None => (needle.trim(), false),
+    };
+    if needle.is_empty() {
+        return false;
+    }
+    let starts_word = |t: &str| t.chars().next().is_some_and(char::is_alphanumeric);
+    let mut from = 0;
+    while let Some(pos) = text[from..].find(needle) {
+        let start = from + pos;
+        let tail = &text[start + needle.len()..];
+        let before = !text[..start].chars().next_back().is_some_and(char::is_alphanumeric);
+        let tail = tail
+            .strip_prefix("es")
+            .filter(|t| !starts_word(t))
+            .or_else(|| tail.strip_prefix('s').filter(|t| !starts_word(t)))
+            .unwrap_or(tail);
+        if before && (prefix || !starts_word(tail)) {
+            return true;
+        }
+        from = start + needle.chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
+/// Requests for a deliverable: a deck, slides or a report *about* travel, spending or health is
+/// still a deliverable, so the topic rules below do not claim it.
+const DELIVERABLES: &[&str] = &["deck", "pitch", "presentation", "slides", "slide", "document", "report"];
 
 pub fn detect_kind(text: &str) -> Kind {
     let l = text.to_lowercase();
@@ -139,7 +173,7 @@ pub fn detect_kind(text: &str) -> Kind {
         "reply", "combine", "build me", "make me", "create", "schedule", "cancel", "remind me to",
         "set a reminder", "plan a", "plan me", "prepare", "apply", "handle it", "do it",
     ];
-    if has_any(&l, &action) {
+    if mentions(&l, &action) {
         Kind::Action
     } else {
         Kind::Question
@@ -148,9 +182,9 @@ pub fn detect_kind(text: &str) -> Kind {
 
 pub fn detect_urgency(text: &str) -> Urgency {
     let l = text.to_lowercase();
-    if has_any(&l, &["urgent", "asap", "overwhelmed", "right now", "emergency", "immediately"]) {
+    if mentions(&l, &["urgent", "asap", "overwhelmed", "right now", "emergency", "immediately"]) {
         Urgency::High
-    } else if has_any(&l, &["whenever", "no rush", "sometime", "eventually"]) {
+    } else if mentions(&l, &["whenever", "no rush", "sometime", "eventually"]) {
         Urgency::Low
     } else {
         Urgency::Normal
@@ -179,7 +213,7 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
     };
 
     // Daily briefing — both worlds through the shared briefing adapter.
-    if has_any(&l, &["what do i need to know", "start my day", "good morning", "morning briefing", "my briefing", "brief me"]) {
+    if mentions(&l, &["what do i need to know", "start my day", "good morning", "morning briefing", "my briefing", "brief me"]) {
         return Some(mk(
             vec![Domain::Work, Domain::Home],
             vec![t(Domain::Shared, "briefing", "today across work and home", "morning")],
@@ -187,7 +221,7 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
         ));
     }
     // Prepare for the afternoon — work productivity + team prep.
-    if has_any(&l, &["prepare me for", "prep me for", "my afternoon", "afternoon meeting", "next meeting"]) {
+    if mentions(&l, &["prepare me for", "prep me for", "my afternoon", "afternoon meeting", "next meeting"]) {
         return Some(mk(
             vec![Domain::Work],
             vec![
@@ -198,7 +232,7 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
         ));
     }
     // Overwhelmed / reorganize — both worlds, high urgency, an action.
-    if has_any(&l, &["overwhelmed", "reorganize my day", "reorganise my day", "reorganize today", "lighter day", "too much today", "help me reorganize"]) {
+    if mentions(&l, &["overwhelmed", "reorganize my day", "reorganise my day", "reorganize today", "lighter day", "too much today", "help me reorganize"]) {
         return Some(IntakeResult {
             domains: vec![Domain::Work, Domain::Home],
             targets: vec![
@@ -212,7 +246,7 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
         });
     }
     // Work status — fan out across the work world.
-    if has_any(&l, &["happening with work", "how is work", "how's work", "work status", "what's up at work", "whats up at work", "at work today"]) {
+    if mentions(&l, &["happening with work", "how is work", "how's work", "work status", "what's up at work", "whats up at work", "at work today"]) {
         return Some(mk(
             vec![Domain::Work],
             vec![
@@ -223,7 +257,7 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
         ));
     }
     // Family commitments — home world (Family agent lands in S5; People adapter until then).
-    if has_any(&l, &["family commitment", "family event", "family plans", "remind me about family", "what's happening at home", "whats happening at home", "home commitments"]) {
+    if mentions(&l, &["family commitment", "family event", "family plans", "remind me about family", "what's happening at home", "whats happening at home", "home commitments"]) {
         return Some(mk(
             vec![Domain::Home],
             vec![t(Domain::Home, "family", "family commitments and important dates", "home")],
@@ -231,27 +265,33 @@ pub fn classify_rules(text: &str) -> Option<IntakeResult> {
         ));
     }
     // Personal tasks and errands — home world, native card.
-    if has_any(&l, &["my personal tasks", "my errands", "personal to-do", "personal todo", "what do i need to do at home", "household tasks"]) {
+    if mentions(&l, &["my personal tasks", "errand", "personal to-do", "personal todo", "what do i need to do at home", "household tasks"]) {
         return Some(mk(vec![Domain::Home], vec![t(Domain::Home, "personal_productivity", "personal tasks and errands", "home")], kind));
     }
     // Reading & knowledge.
-    if has_any(&l, &["been reading", "what have i read", "my reading", "what am i learning", "reading lately"]) {
+    if mentions(&l, &["been reading", "what have i read", "my reading", "what am i learning", "reading lately"]) {
         return Some(mk(
             vec![Domain::Shared],
             vec![t(Domain::Shared, "reading_knowledge", "recent reading, topics and trend", "proactive")],
             Kind::Question,
         ));
     }
-    // Travel — home world through the lisbon adapter (before the keyword fallback, whose
-    // `week` rule would otherwise catch "weekend trip").
-    if has_any(&l, &["trip", "travel", "flight", "hotel", "itinerary", "vacation", "holiday", "lisbon"]) {
+    // A deliverable goes to the router / keyword fallback (the deck flow), whatever its topic.
+    if mentions(&l, DELIVERABLES) {
+        return None;
+    }
+    // Travel — home world through the lisbon adapter.
+    if mentions(&l, &["trip", "travel", "flight", "hotel", "itinerary", "vacation", "holiday", "lisbon"]) {
         return Some(mk(vec![Domain::Home], vec![t(Domain::Home, "travel", "flights, stay and itinerary", "lisbon")], kind));
     }
     // Money / health — home world through the week adapter.
-    if has_any(&l, &["spending", "my budget", "my money", "how much did i spend", "subscriptions"]) {
+    if mentions(&l, &["spending", "my budget", "my money", "how much did i spend", "subscriptions"]) {
         return Some(mk(vec![Domain::Home], vec![t(Domain::Home, "finance", "spending and budget", "week")], kind));
     }
-    if has_any(&l, &["my sleep", "my health", "exercise", "workout", "wellness"]) {
+    // "exercise" alone is also what you do with stock options.
+    if mentions(&l, &["my sleep", "my health", "exercise", "workout", "wellness"])
+        && !mentions(&l, &["option", "stock option", "shares", "equity", "rsu", "vesting"])
+    {
         return Some(mk(vec![Domain::Home], vec![t(Domain::Home, "health_wellness", "sleep, exercise and habits", "week")], kind));
     }
     None
@@ -268,7 +308,7 @@ pub async fn classify(
         return r;
     }
     if let Some(runner) = router {
-        match crate::agents::router::classify(runner, user_id, session_id, text, crate::events::mock::pick_scenario).await {
+        match crate::agents::router::classify(runner, user_id, session_id, text, crate::events::mock::match_scenario).await {
             crate::agents::router::ClassifyOutcome::Scenario(key) => {
                 return IntakeResult::from_scenario(&key, text, "llm");
             }
@@ -277,13 +317,21 @@ pub async fn classify(
             }
         }
     }
-    IntakeResult::from_scenario(crate::events::mock::pick_scenario(text), text, "keyword")
+    classify_keywords(text)
 }
 
 /// Synchronous classification without an LLM (rules → keyword). Used by tests and fallbacks.
 pub fn classify_offline(text: &str) -> IntakeResult {
-    classify_rules(text)
-        .unwrap_or_else(|| IntakeResult::from_scenario(crate::events::mock::pick_scenario(text), text, "keyword"))
+    classify_rules(text).unwrap_or_else(|| classify_keywords(text))
+}
+
+/// The Phase 1 keyword fallback. Text that names no scenario gets a clarifying question rather
+/// than a guess.
+fn classify_keywords(text: &str) -> IntakeResult {
+    match crate::events::mock::match_scenario(text) {
+        Some(key) => IntakeResult::from_scenario(key, text, "keyword"),
+        None => IntakeResult::clarify(CLARIFY_MESSAGE),
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +363,52 @@ mod tests {
 
         let r = classify_offline("What have I been reading lately?");
         assert_eq!(r.targets[0].agent, "reading_knowledge");
+    }
+
+    #[test]
+    fn intake_matches_whole_words_not_substrings() {
+        // Reported misroutes: "Stripe" contains "trip", a deck about spending is a deck, and
+        // an option exercise is not a workout.
+        let r = classify_offline("Build me a pitch deck on Stripe");
+        assert_eq!(r.primary_scenario(), Some("deck"));
+        assert_eq!(r.targets[0].agent, "work_automation");
+        assert_eq!(classify_offline("Build me a deck on our cloud spending").primary_scenario(), Some("deck"));
+        assert_eq!(classify_offline("Write a report on travel costs").primary_scenario(), Some("deck"));
+        let r = classify_offline("When is my option exercise deadline?");
+        assert!(r.targets.iter().all(|t| t.agent != "health_wellness"), "{:?}", r.targets);
+
+        // The topic rules still fire on their own words, plurals included.
+        assert_eq!(classify_offline("Plan a weekend trip to Lisbon").targets[0].agent, "travel");
+        assert_eq!(classify_offline("Book me flights to Paris").targets[0].agent, "travel");
+        assert_eq!(classify_offline("How's my spending?").targets[0].agent, "finance");
+        assert_eq!(classify_offline("Are my subscriptions too high?").targets[0].agent, "finance");
+        assert_eq!(classify_offline("How much exercise did I get?").targets[0].agent, "health_wellness");
+        assert_eq!(classify_offline("How many workouts this week?").targets[0].agent, "health_wellness");
+        assert_eq!(classify_offline("Summarize what changed this week").primary_scenario(), Some("week"));
+        assert_eq!(classify_offline("How are the markets?").primary_scenario(), Some("live"));
+
+        assert_eq!(classify_offline("What personal errands are due?").targets[0].agent, "personal_productivity");
+
+        // Nothing recognisable: ask, never default to a Lisbon trip.
+        let r = classify_offline("Where am I on my career goals?");
+        assert_eq!(r.clarify.as_deref(), Some(CLARIFY_MESSAGE));
+        assert!(r.targets.is_empty());
+    }
+
+    #[test]
+    fn intake_word_matcher_respects_boundaries() {
+        assert!(mentions("plan a trip", &["trip"]));
+        assert!(mentions("two trips, one week", &["trip"]));
+        assert!(!mentions("pitch deck on stripe", &["trip"]));
+        assert!(!mentions("a weekend away", &["week"]));
+        assert!(mentions("my weekly summary", &["summar*"]));
+        assert!(mentions("what's happening at home?", &["what's happening at home"]));
+        assert!(!mentions("a moved meeting", &["move "]));
+        assert!(mentions("move it", &["move "]));
+        assert!(mentions("reschedule my 1:1s", &["reschedule"]));
+        assert!(!mentions("", &["trip"]) && !mentions("trip", &[""]));
+        assert_eq!(detect_kind("Send it"), Kind::Action);
+        assert_eq!(detect_kind("Who is sending the invoices?"), Kind::Question);
     }
 
     #[test]

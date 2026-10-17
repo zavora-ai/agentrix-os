@@ -186,6 +186,13 @@ fn tour_prompts_advance_in_order() {
 fn keyword_router_still_maps_pitch_to_deck() {
     assert_eq!(mock::pick_scenario("pitch presentation"), "deck");
     assert_eq!(mock::pick_scenario("Start my day"), "morning");
+    // Whole words: "weekend" is not "week", "deliver the olive order" is not "live".
+    assert_eq!(mock::match_scenario("Plan a weekend trip to Lisbon"), Some("lisbon"));
+    assert_eq!(mock::match_scenario("Deliver the olive order"), None);
+    assert_eq!(mock::match_scenario("Give me a weekly summary"), Some("week"));
+    // Only the scripted mock stream falls back to a card set; routing asks instead.
+    assert_eq!(mock::pick_scenario("Deliver the olive order"), "lisbon");
+    assert!(spatial_os::mother::intake::classify_offline("Deliver the olive order").clarify.is_some());
 }
 
 #[tokio::test]
