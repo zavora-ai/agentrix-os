@@ -16,6 +16,23 @@ agents reach the same pipeline through the Agentic Web Protocol (`/.well-known/a
 a Work World and a Home World, an intelligence layer, Observe / Suggest / Automate permissions,
 and user-owned memory.
 
+## Agentrix OS 1.0 — where this repo is going
+
+`docs/AGENTIC_OS.md` (architecture), `docs/BASE_AGENTS.md` (agents and companion apps) and
+`docs/ROADMAP_1_0.md` (milestones OS0–OS4, task ids `OSn-Tm`) replace the scenario prototype with
+an agentic OS. Decided on 2026-10-17 (ADR-007, 008, 011, 012):
+
+- Agents are **separately compiled processes** supervised by the kernel `agentrixd`: A2A tasks in,
+  MCP syscalls to the kernel out, models only through the kernel's model gateway. Agents hold no
+  keys, no database handle and no network; the kernel's permission gate decides every effect.
+- Models: **`claude-fable-5-1` for the Mother**, **`claude-opus-5-5` for agents**, effort set per route.
+- Shell: **Svelte 5 + TypeScript**, packaged with **Electron** (thin main process) and served to browsers.
+- This repository evolves into the Cargo workspace (`crates/`, `agents/`, `shell/`, `desktop/`);
+  the prototype under `src/` and `web/` is removed once the new shell reaches parity in OS1.
+
+Until OS0 lands, the sections below describe the prototype. Rule 7 (preserve the design) applies to
+the prototype only; the new shell follows ADR-012 and the design system in AGENTIC_OS §10.6.
+
 ## Build and run
 
 - **Sibling checkout required.** `Cargo.toml` uses path dependencies on `../adk-rust/*`.
