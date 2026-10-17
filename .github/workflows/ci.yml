@@ -11,7 +11,7 @@ env:
   # adk-rust is a path dependency cloned next to this repo. Pin it so a push to adk-rust main
   # cannot break this build; bump deliberately (and refresh Cargo.lock in the same commit).
   ADK_RUST_REPO: https://github.com/zavora-ai/adk-rust.git
-  ADK_RUST_REF: 59b0cbae6453ffc347ff792af23ed1997ab37c60
+  ADK_RUST_REF: cb521e680f6ca0752b8577914789186290cc2163
 
 jobs:
   rust:

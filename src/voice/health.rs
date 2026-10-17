@@ -72,8 +72,9 @@ impl SessionEnd {
 }
 
 /// Classify the close Gemini sent (`code`, `reason` from adk-realtime's `DisconnectReason`).
-/// 1008 + "API key" is a rejected key; the session-length cap (about two minutes with video,
-/// fifteen audio-only) arrives as a deadline / limit close.
+/// 1008 + "API key" is a rejected key; a session-length cap (documented: about ten minutes per
+/// connection, and without context window compression two with video, fifteen audio-only)
+/// arrives as a deadline / limit close.
 pub fn classify_disconnect(code: Option<u16>, reason: &str) -> SessionEnd {
     let r = reason.to_ascii_lowercase();
     if mentions_api_key(reason) || r.contains("permission denied") {

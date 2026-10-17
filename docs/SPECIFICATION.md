@@ -482,6 +482,12 @@ card whose agent failed or whose integration is not connected (`big` is "Unavail
 | `GET` | `/artifacts/{path}` | Serve artifacts (auth scoped) |
 | `GET` | `/health` | Health check |
 
+**Session ownership.** A session created while signed in (`POST /api/sessions`, or the voice
+websocket, with a valid JWT) is bound to that user (`ui_sessions.signed_in`). The session routes
+open to anonymous callers (`/intent`, `/chat` GET and POST, `/events`, `/ws/voice?session_id=`,
+`/api/greeting?session_id=`) then answer 403 to anyone whose JWT subject is not the session's
+`user_id`. Sessions created without signing in stay usable by whoever holds the id.
+
 ### 7.7 UI actualization map
 
 | Current `field.html` function | Production behavior |

@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::domain::Domain;
 use crate::intelligence::ledger::ActivityEvent;
+use crate::routes::actions::caller_session;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -41,9 +42,7 @@ pub async fn record(
     Json(body): Json<UiEventsBody>,
 ) -> Result<StatusCode, Response> {
     state.awp.check(&headers, &format!("events:{session_id}"), "record_ui_events").await?;
-    let Some(rec) = state.sessions.get(&session_id).await else {
-        return Err((StatusCode::NOT_FOUND, "session not found").into_response());
-    };
+    let rec = caller_session(&state, &headers, &session_id).await?;
     if body.events.len() > 200 {
         return Err((StatusCode::BAD_REQUEST, "too many events").into_response());
     }

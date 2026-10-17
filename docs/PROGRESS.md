@@ -82,6 +82,7 @@ Owns migrations, stores, routes, the SSE enum, the manifest and the allowlist fi
 | `014_recipes.sql` | `automation_recipes` | S12-T1 | E |
 | `015_pending_actions_executing.sql` | `pending_actions` status `executing` (approvals run once) | review fix | — |
 | `016_agent_sessions_id_index.sql` | index on `agent_sessions (id)` | review fix | — |
+| `017_ui_sessions_signed_in.sql` | `ui_sessions.signed_in` (owner-bound sessions) | security review 2026-10-17 | — |
 
 | Team sprint | Plan tasks | What ships | Hand-off | Status |
 |---|---|---|---|---|
