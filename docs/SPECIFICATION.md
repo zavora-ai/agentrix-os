@@ -453,7 +453,7 @@ All server → client events on `POST /api/sessions/{sid}/intent` (or GET SSE ch
 | `conduct` | `steps[]`: `{op, source?, target?}` | `conductAction()` server-driven |
 | `agent_active` | `id`, `title`, `glyph` | `agentActive()` |
 | `agent_done` | `id` | `agentDone()` |
-| `error` | `message`, `recoverable` | toast + log |
+| `error` | `message` (HTML-escaped by the server), `recoverable` | toast + log |
 | `done` | — | close stream |
 
 `simulated: true` on a card and on its `resolve` marks a scripted sample streamed in a live

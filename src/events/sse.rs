@@ -30,7 +30,12 @@ pub enum FieldEvent {
         slide: u32,
         total: u32,
     },
+    /// `message` is often a runner or tool error (`e.to_string()`) that can echo tool output, and
+    /// the field UI shows it with `innerHTML`. It is escaped when the event is serialized, so
+    /// every construction site is covered; escaping is idempotent, so the Mother re-wrapping an
+    /// already-serialized error does not double-encode it.
     Error {
+        #[serde(serialize_with = "serialize_escaped")]
         message: String,
     },
     SuzySummary {
@@ -82,4 +87,45 @@ pub struct ConductStep {
 
 pub fn to_event(ev: &FieldEvent) -> Event {
     Event::default().data(serde_json::to_string(ev).unwrap_or_else(|_| "{}".into()))
+}
+
+fn serialize_escaped<S: serde::Serializer>(text: &str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&crate::html::escape(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wire(ev: &FieldEvent) -> serde_json::Value {
+        serde_json::to_value(ev).unwrap()
+    }
+
+    #[test]
+    fn error_message_is_escaped_on_the_wire() {
+        let ev = FieldEvent::Error {
+            message: "tool failed: <img src=x onerror=alert(1)> & retried".into(),
+        };
+        assert_eq!(
+            wire(&ev),
+            serde_json::json!({
+                "type": "error",
+                "message": "tool failed: &lt;img src=x onerror=alert(1)&gt; &amp; retried",
+            })
+        );
+    }
+
+    #[test]
+    fn rewrapped_error_is_not_double_escaped() {
+        // The Mother copies `message` out of a target's serialized event and emits it again.
+        let first = wire(&FieldEvent::Error { message: "<script>x</script> AT&T".into() });
+        let copied = first["message"].as_str().unwrap().to_string();
+        assert_eq!(wire(&FieldEvent::Error { message: copied }), first);
+    }
+
+    #[test]
+    fn constant_error_text_is_unchanged() {
+        let msg = "Missing deck artifacts — run a deck intent first";
+        assert_eq!(wire(&FieldEvent::Error { message: msg.into() })["message"], msg);
+    }
 }

@@ -167,7 +167,7 @@
         streamedSuggestion = ev.text;
       } else if (ev.type === 'error' && pendingEl) {
         pendingEl.classList.remove('pending');
-        pendingEl.textContent = ev.message || 'Something went wrong.';
+        pendingEl.innerHTML = ev.message || 'Something went wrong.'; // escaped by the server
         pendingEl = null;
       }
     });
