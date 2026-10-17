@@ -4,8 +4,13 @@
 //! shows a plausible default. Mock cards streamed in a live deployment (a scenario whose runner
 //! did not boot) carry `"simulated": true` so the UI text, Suzy and the Mother's synthesis treat
 //! them as samples, not as the user's data.
+//!
+//! The agent's own words go into card HTML escaped ([`crate::html::escape`]): they summarize
+//! email, Slack and news that anyone can write.
 
 use serde_json::{json, Value};
+
+use crate::html;
 
 /// Resolve for a card whose agent ran but produced nothing usable.
 pub fn unavailable(sub: impl Into<String>) -> Value {
@@ -17,22 +22,24 @@ pub fn not_connected(sub: impl Into<String>) -> Value {
     json!({ "big": "Not connected", "sub": sub.into(), "actions": ["Dismiss"], "unavailable": true })
 }
 
-/// Up to `n` non-empty lines of an agent's own text, formatted as card lines.
+/// Up to `n` non-empty lines of an agent's own text, as card HTML: each line escaped, then given
+/// the server's `<b>•</b>` bullet. A line that starts with `<b>` is escaped like any other; no
+/// agent is asked for markup, so markup in its text came from the content it read.
 pub fn agent_lines(text: &str, n: usize) -> Vec<String> {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .take(n)
-        .map(|l| if l.starts_with("<b>") { l.to_string() } else { format!("<b>•</b> {l}") })
+        .map(|l| format!("<b>•</b> {}", html::escape(l)))
         .collect()
 }
 
-/// First non-empty line of an agent's text, cut to `max` characters.
+/// First non-empty line of an agent's text, cut to `max` characters, as escaped card HTML.
 pub fn first_line(text: &str, max: usize) -> Option<String> {
     text.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .map(|l| l.chars().take(max).collect())
+        .map(|l| html::escape(&l.chars().take(max).collect::<String>()))
 }
 
 /// A `lines` resolve from the agent's own text, or [`unavailable`] when it said nothing.
@@ -111,5 +118,29 @@ mod tests {
         assert!(is_simulated(&card) && is_simulated(&card["resolve"]));
         assert_eq!(card["resolve"]["sub"], "Simulated sample · TAP Air");
         assert!(!is_simulated(&json!({"title": "Flights"})));
+    }
+
+    #[test]
+    fn agent_lines_escape_markup_from_summarized_content() {
+        let text = "Re: <img src=x onerror=alert(1)>\n<script>alert(document.cookie)</script>\n<b>Fri</b><img src=x onerror=alert(2)>";
+        let lines = agent_lines(text, 3);
+        assert_eq!(lines[0], "<b>•</b> Re: &lt;img src=x onerror=alert(1)&gt;");
+        assert_eq!(lines[1], "<b>•</b> &lt;script&gt;alert(document.cookie)&lt;/script&gt;");
+        assert_eq!(lines[2], "<b>•</b> &lt;b&gt;Fri&lt;/b&gt;&lt;img src=x onerror=alert(2)&gt;");
+        for l in &lines {
+            assert!(!l.contains("<img") && !l.contains("<script"), "{l}");
+        }
+        let r = lines_or_unavailable("Q&A moved <b>today</b>", "x", &["Open"]);
+        assert_eq!(r["lines"][0], "<b>•</b> Q&amp;A moved &lt;b&gt;today&lt;/b&gt;");
+    }
+
+    #[test]
+    fn first_line_is_escaped_after_cutting() {
+        assert_eq!(
+            first_line("\n  <img src=x onerror=alert(1)> moved to 3pm\nmore", 72).as_deref(),
+            Some("&lt;img src=x onerror=alert(1)&gt; moved to 3pm")
+        );
+        assert_eq!(first_line("<script>", 4).as_deref(), Some("&lt;scr"));
+        assert_eq!(first_line(" \n ", 72), None);
     }
 }

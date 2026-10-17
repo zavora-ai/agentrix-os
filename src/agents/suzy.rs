@@ -91,7 +91,8 @@ fn text_from_parts(content: Option<Content>) -> String {
         .unwrap_or_default()
 }
 
-/// Generate a dynamic Suzy summary. Returns plain HTML string.
+/// Generate a dynamic Suzy summary. Returns inline HTML in which only `<b>` is markup: the card
+/// text Suzy reads came from email, Slack and news, so anything else she writes is escaped.
 pub async fn summarize(
     runner: &Runner,
     user_id: &str,
@@ -123,9 +124,9 @@ pub async fn summarize(
         }
     }
 
-    let trimmed = html.trim().to_string();
+    let trimmed = html.trim();
     if trimmed.is_empty() {
         anyhow::bail!("empty suzy summary");
     }
-    Ok(trimmed)
+    Ok(crate::html::sanitize_inline(trimmed))
 }

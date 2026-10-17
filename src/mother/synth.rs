@@ -197,7 +197,8 @@ pub fn compose_template(
     }
 
     Synthesis {
-        html: parts.join(" "),
+        // Memory notes carry values agents proposed from content they read.
+        html: crate::html::sanitize_inline(&parts.join(" ")),
         actions,
         source: "template",
     }
@@ -259,8 +260,9 @@ pub async fn compose(
         facts_block(intent, results, memory_notes)
     );
     match run_prompt(runner, user_id, session_id, &prompt).await {
+        // The facts came from agent text; only the `<b>` the prompt asks for stays markup.
         Ok(html) => Synthesis {
-            html,
+            html: crate::html::sanitize_inline(&html),
             actions: template.actions,
             source: "llm",
         },
@@ -319,6 +321,21 @@ mod tests {
         assert_eq!(draft.mode, Mode::Suggest);
         assert_eq!(s.actions[0].mode, Mode::Observe);
         assert_eq!(s.source, "template");
+    }
+
+    #[test]
+    fn synth_template_escapes_agent_text_and_memory_notes() {
+        let line = crate::orchestrator::fallback::agent_lines("Re: <img src=x onerror=alert(1)>", 1).remove(0);
+        let results = vec![res(Domain::Work, "morning", vec![
+            ("Needs you", "inbox.agent", Domain::Work, serde_json::json!({"lines":[line],"actions":["Draft replies"]})),
+            ("Brief", "news.agent", Domain::Work, serde_json::json!({"big":"AT&T <script>alert(1)</script>","sub":"","actions":[]})),
+        ])];
+        let note = "travel.note: <img src=x onerror=alert(2)> (I think)".to_string();
+        let s = compose_template("Start my day", &results, &[note], &|_| Mode::Suggest);
+        assert!(s.html.contains("<b>Needs you</b> • Re: &lt;img src=x onerror=alert(1)&gt;"), "{}", s.html);
+        assert!(s.html.contains("<b>Brief</b> AT&amp;T alert(1)"), "{}", s.html);
+        assert!(s.html.contains("travel.note: &lt;img src=x onerror=alert(2)&gt; (I think)"), "{}", s.html);
+        assert!(!s.html.contains("<img") && !s.html.contains("<script"), "{}", s.html);
     }
 
     #[test]

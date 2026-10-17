@@ -54,7 +54,7 @@ fn first_percent(text: &str) -> Option<String> {
 fn markets_resolve(agent_text: &str) -> serde_json::Value {
     let actions = ["Details", "Set alert"];
     match (first_percent(agent_text), fallback::first_line(agent_text, 72)) {
-        (Some(pct), Some(sub)) => serde_json::json!({ "big": pct, "sub": sub, "actions": actions }),
+        (Some(pct), Some(sub)) => serde_json::json!({ "big": crate::html::escape(&pct), "sub": sub, "actions": actions }),
         _ => fallback::lines_or_unavailable(agent_text, "Markets returned nothing this time", &actions),
     }
 }

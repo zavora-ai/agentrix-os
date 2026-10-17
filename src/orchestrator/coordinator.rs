@@ -6,6 +6,7 @@ use adk_runner::Runner;
 use tokio::sync::mpsc::Sender;
 
 use crate::events::sse::{to_event, FieldEvent};
+use crate::html;
 use crate::orchestrator::fallback;
 use crate::scenarios::tour;
 use crate::state::{SessionRecord, SessionStore};
@@ -29,7 +30,8 @@ pub async fn suzy_html(
     fallback_summary(record.as_ref())
 }
 
-/// Deterministic summary from the session's resolved cards: titles and their headline values only.
+/// Deterministic summary from the session's resolved cards: titles and their headline values only,
+/// tags stripped and the text escaped, so the only markup is the bold title added here.
 pub fn fallback_summary(record: Option<&SessionRecord>) -> String {
     let cards: Vec<_> = record
         .into_iter()
@@ -48,7 +50,7 @@ pub fn fallback_summary(record: Option<&SessionRecord>) -> String {
                 resolve.get("lines")?.as_array()?.first()?.as_str().map(crate::mother::synth::strip_tags)
             })?;
             let value = crate::mother::synth::strip_tags(&value);
-            Some(format!("<b>{title}</b> {}", value.trim_end_matches('.')))
+            Some(format!("<b>{}</b> {}", html::escape(title), html::escape(value.trim_end_matches('.'))))
         })
         .collect();
     if facts.is_empty() {
@@ -106,5 +108,53 @@ pub async fn emit_tour_advance(
                 })))
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::state::{CardRecord, SessionArtifacts};
+
+    fn record(cards: Vec<(serde_json::Value, serde_json::Value)>) -> SessionRecord {
+        SessionRecord {
+            session_id: "s".into(),
+            user_id: "u".into(),
+            scenario: Some("morning".into()),
+            origin_text: None,
+            artifacts: SessionArtifacts::default(),
+            cards: cards
+                .into_iter()
+                .enumerate()
+                .map(|(index, (card, resolve))| CardRecord {
+                    index,
+                    card,
+                    status: "done".into(),
+                    resolve: Some(resolve),
+                    pinned: false,
+                    removed: false,
+                    domain: Default::default(),
+                })
+                .collect(),
+            agents_active: vec![],
+            agents_resting: vec![],
+            chat_history: vec![],
+        }
+    }
+
+    #[test]
+    fn fallback_summary_escapes_card_text() {
+        let line = fallback::agent_lines("<img src=x onerror=alert(1)> wants a reply", 1).remove(0);
+        let r = record(vec![
+            (json!({"title": "Needs you"}), json!({"lines": [line], "actions": []})),
+            (json!({"title": "Brief <i>"}), json!({"big": "AT&T <script>alert(1)</script>", "sub": "", "actions": []})),
+        ]);
+        assert_eq!(
+            fallback_summary(Some(&r)),
+            "Here's what came back: <b>Needs you</b> • &lt;img src=x onerror=alert(1)&gt; wants a reply · \
+             <b>Brief &lt;i&gt;</b> AT&amp;T alert(1)."
+        );
     }
 }

@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::agents::{family, personal_productivity};
 use crate::domain::Domain;
+use crate::html;
 use crate::intelligence::ledger::LedgerService;
 use crate::memory::MemoryService;
 use crate::mother::intake::Target;
@@ -84,7 +85,7 @@ pub async fn fold(
             Target { world: Domain::Home, agent: "family".into(), task: "important dates".into(), scenario: "home".into() },
             one_card_events(
                 card("Family", "family.agent", "🏡", Domain::Home),
-                serde_json::json!({ "big": big, "sub": sub, "actions": ["Add a date", "Open"], "source": f.sources }),
+                serde_json::json!({ "big": big, "sub": html::escape(&sub), "actions": ["Add a date", "Open"], "source": f.sources }),
                 Domain::Home,
             ),
         ));
@@ -104,7 +105,7 @@ pub async fn fold(
             Target { world: Domain::Home, agent: "personal_productivity".into(), task: "personal tasks".into(), scenario: "home".into() },
             one_card_events(
                 card("Personal", "personal.agent", "✅", Domain::Home),
-                serde_json::json!({ "big": big, "sub": sub, "actions": ["Plan them", "Snooze"], "postponed_total": p.postponed_total }),
+                serde_json::json!({ "big": big, "sub": html::escape(&sub), "actions": ["Plan them", "Snooze"], "postponed_total": p.postponed_total }),
                 Domain::Home,
             ),
         ));
