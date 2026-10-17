@@ -22,11 +22,7 @@ Output a concise brief: company, funding, team size, key risks — 4-6 sentences
         )
         .toolset(tools)
         .tool_execution_strategy(adk_core::ToolExecutionStrategy::Parallel)
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.3),
-            max_output_tokens: Some(2048),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.3, 2048))
         .build()?;
 
     Ok(Arc::new(agent))

@@ -24,11 +24,17 @@ pub struct CardOutcome {
     pub agent: String,
     pub domain: Domain,
     pub resolve: Option<serde_json::Value>,
+    /// Scripted sample streamed because the scenario's live runner is not running. Never a fact.
+    #[serde(default)]
+    pub simulated: bool,
 }
 
 impl CardOutcome {
     /// One-line, content-free-ish fact for the synthesis block.
     pub fn headline(&self) -> String {
+        if self.simulated {
+            return format!("{}: simulated sample, not the user's data", self.title);
+        }
         let Some(r) = &self.resolve else {
             return format!("{}: pending", self.title);
         };
@@ -53,6 +59,9 @@ impl CardOutcome {
     }
 
     pub fn first_action(&self) -> Option<String> {
+        if self.simulated {
+            return None;
+        }
         self.resolve
             .as_ref()?
             .get("actions")?
@@ -280,6 +289,7 @@ mod tests {
                     title: title.into(),
                     agent: agent.into(),
                     domain,
+                    simulated: crate::orchestrator::fallback::is_simulated(&resolve),
                     resolve: Some(resolve),
                 })
                 .collect(),
@@ -309,6 +319,20 @@ mod tests {
         assert_eq!(draft.mode, Mode::Suggest);
         assert_eq!(s.actions[0].mode, Mode::Observe);
         assert_eq!(s.source, "template");
+    }
+
+    #[test]
+    fn simulated_cards_are_not_facts_or_actions() {
+        let sample = crate::orchestrator::fallback::simulated_resolve(
+            &serde_json::json!({"big":"$284 · TAP Air","sub":"Fri 6:40pm","actions":["Hold seat"]}),
+        );
+        let results = vec![res(Domain::Home, "lisbon", vec![("Flights", "travel.agent", Domain::Home, sample)])];
+        let block = facts_block("Plan Lisbon", &results, &[]);
+        assert!(block.contains("- Flights: simulated sample, not the user's data"), "{block}");
+        assert!(!block.contains("$284"), "{block}");
+        let s = compose_template("Plan Lisbon", &results, &[], &|_| Mode::Suggest);
+        assert!(!s.html.contains("$284"), "{}", s.html);
+        assert!(s.actions.is_empty());
     }
 
     #[test]

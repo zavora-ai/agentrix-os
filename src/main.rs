@@ -282,10 +282,11 @@ async fn main() -> anyhow::Result<()> {
     let voice = VoiceState::boot(&config);
     if voice.enabled {
         tracing::info!(
-            "Gemini Live voice enabled (model={}, voice={})",
+            "Gemini Live voice configured (model={}, voice={}) — checking the key",
             config.gemini_live_model,
             voice.voice_name
         );
+        voice.spawn_key_check(&config);
     }
 
     let runtime = spatial_os::state::RuntimeStatus {

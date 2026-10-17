@@ -22,11 +22,7 @@ Check property listings or market indicators for notable price drops.
 Summarize one alert-worthy finding in 2-3 sentences."#,
             )
             .toolset(tools)
-            .generate_content_config(adk_core::GenerateContentConfig {
-                temperature: Some(0.25),
-                max_output_tokens: Some(1024),
-                ..Default::default()
-            })
+            .generate_content_config(crate::llm::content_config(model_name, 0.25, 1024))
             .build()?;
         return Ok(Arc::new(agent));
     }

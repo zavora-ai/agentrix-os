@@ -55,6 +55,7 @@ cargo test --test validate -- postgres_schema ui_session_persists pg_agent_sessi
 cargo test --test validate deck_workflow_writes_three_artifacts -- --ignored              # full E2E, slow
 cargo clippy --all-targets
 node scripts/test-gesture-classifier.mjs          # camera gesture rules (web/static/gesture-classifier.js)
+node scripts/test-live-voice.mjs                  # mic/camera/Live failure paths (web/static/live-voice.js)
 ```
 
 - **libtest filters are substrings, not regexes.** Pass several names after `--`; a single

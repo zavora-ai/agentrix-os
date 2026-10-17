@@ -206,17 +206,15 @@ pub async fn stream_scenario(
         }
     }
 
+    // Scripted cards. With a text-model key configured this is a live deployment whose runner
+    // for this scenario did not boot, so the cards are labeled simulated (rule 1); without a key
+    // it is the mock tour, labeled by the UI banner (NFR-008).
     Sse::new(mock::stream_intent_with_scenario(
         &scenario,
         &text,
-        if state.coordinator_enabled {
-            state.suzy_runner.clone()
-        } else {
-            None
-        },
+        state.runtime.agents_enabled,
         sessions,
         persist.then_some(session_id),
-        persist.then_some(user_id),
     ))
     .into_response()
 }
@@ -247,6 +245,7 @@ pub fn dispatch_action(req: ActionDispatch<'_>) -> Response {
         req.action,
         req.scenario.as_deref(),
         &req.text,
+        req.state.runtime.agents_enabled,
     ))
     .into_response()
 }

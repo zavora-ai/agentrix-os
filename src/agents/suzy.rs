@@ -23,11 +23,7 @@ Use <b> for emphasis on key numbers, names, and next actions.
 Be concise and actionable. Do not use markdown.
 Output ONLY the HTML content (no wrapper tags like <p>)."#,
         )
-        .generate_content_config(adk_core::GenerateContentConfig {
-            temperature: Some(0.35),
-            max_output_tokens: Some(512),
-            ..Default::default()
-        })
+        .generate_content_config(crate::llm::content_config(model_name, 0.35, 512))
         .build()?;
 
     Ok(Arc::new(agent))
@@ -54,6 +50,10 @@ pub fn session_context(record: &SessionRecord) -> String {
             .get("title")
             .and_then(|t| t.as_str())
             .unwrap_or("card");
+        if crate::orchestrator::fallback::is_simulated(&card.card) {
+            lines.push(format!("{title}: simulated sample, not the user's data"));
+            continue;
+        }
         let status = card.status.as_str();
         if let Some(resolve) = &card.resolve {
             lines.push(format!("{title} ({status}): {resolve}"));

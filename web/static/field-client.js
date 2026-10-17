@@ -12,6 +12,7 @@
     if (!ui || window.__AGENTRIX_DEMO__) return;
 
     let sessionId = null;
+    let sessionReady = Promise.resolve(null);
     let abortController = null;
     const cards = new Map();
 
@@ -478,6 +479,11 @@
       getSessionId() {
         return sessionId;
       },
+      // Resolves once boot has restored or created the page's session (live-voice.js binds
+      // the voice socket to it instead of letting the server mint another).
+      whenSession() {
+        return sessionReady;
+      },
       recordUiEvent(kind, extra) {
         queueUiEvent(kind, extra);
       },
@@ -486,9 +492,10 @@
     wirePersistence();
     wireUiSignals();
     window.addEventListener('agentrix:voice-intent', onVoiceIntent);
-    initSession()
+    sessionReady = initSession()
       .catch(() => ensureSession().catch(() => {}))
-      .then(() => fetchModes());
+      .then(() => sessionId);
+    sessionReady.then(() => fetchModes());
     console.info('[agentrix] live mode — SSE orchestration + persistence enabled');
   }
 

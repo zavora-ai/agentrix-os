@@ -2,6 +2,8 @@
  * Camera window (M10-T5): shows what the camera sends and what comes back — the live feed,
  * frames sent, the last gesture Suzy recognised and what it did, and her spoken reply.
  * Listens to the events live-voice.js and gestures.js emit; never touches the frames.
+ * Without a Live session (voice off, key rejected, session dropped) the camera still runs
+ * local gesture detection, and the caption says so instead of claiming Suzy is watching.
  */
 (function () {
   'use strict';
@@ -16,6 +18,13 @@
 
   let box = null, video = null, status = null, last = null;
   let reply = '', replyDone = false;
+  let live = false, detail = '';
+
+  function render() {
+    if (!status) return;
+    const who = live ? 'Suzy is watching' : 'Gestures on this device';
+    status.textContent = detail ? `${who} · ${detail}` : who;
+  }
 
   function ensure() {
     if (box) return box;
@@ -37,7 +46,9 @@
     if (e.detail?.active) {
       ensure();
       video.srcObject = e.detail.stream;
-      status.textContent = 'Suzy is watching';
+      live = !!e.detail.live;
+      detail = '';
+      render();
       box.classList.add('on');
     } else if (box) {
       box.classList.remove('on');
@@ -45,10 +56,18 @@
     }
   });
 
+  // The Live session came up or went away under a running camera.
+  window.addEventListener('agentrix:camera-live', (e) => {
+    live = !!e.detail?.live;
+    if (!live) detail = ''; // no stale frame count under a local-only caption
+    render();
+  });
+
   window.addEventListener('agentrix:camera-frame', (e) => {
-    if (!status) return;
     const n = e.detail?.count || 0;
-    status.textContent = `Suzy is watching · ${n} frame${n === 1 ? '' : 's'} sent`;
+    live = true;
+    detail = `${n} frame${n === 1 ? '' : 's'} sent`;
+    render();
   });
 
   window.addEventListener('agentrix:gesture', (e) => {
@@ -61,14 +80,14 @@
 
   // Local detector state (gesture-detect.js): loading, ready, hand in view, or unavailable.
   window.addEventListener('agentrix:gesture-detector', (e) => {
-    if (!status) return;
     const d = e.detail || {};
-    if (d.state === 'loading') status.textContent = 'Suzy is watching · loading gesture detector…';
-    else if (d.state === 'unavailable') status.textContent = 'Suzy is watching · local gestures unavailable';
+    if (d.state === 'loading') detail = 'loading gesture detector…';
+    else if (d.state === 'unavailable') detail = 'local gestures unavailable';
     else if (d.state === 'ready') {
       const cat = d.category && d.category !== 'None' ? ` (${d.category.replace('_', ' ').toLowerCase()})` : '';
-      status.textContent = d.hand ? `Suzy is watching · hand in view${cat}` : 'Suzy is watching · gestures ready';
+      detail = d.hand ? `hand in view${cat}` : 'gestures ready';
     }
+    render();
   });
 
   window.addEventListener('agentrix:voice-transcript', (e) => {

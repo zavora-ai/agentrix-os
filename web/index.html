@@ -1709,22 +1709,33 @@ function startSpeechFallback(){
   };
 }
 // Live inputs (M10): the microphone and the camera are independent — either runs alone, both
-// share one Suzy session. The buttons mirror the actual capture state.
+// share one Suzy session. The buttons mirror the actual capture state. The camera also works
+// without a session (local gestures); failures are explained in Suzy's toast by live-voice.js.
 const cam = document.getElementById('cam');
 function syncLiveUi(){
   const live = window.AgentrixLiveVoice;
   if (!live) return;
   const m = !!live.isMicActive?.(), c = !!live.isCameraActive?.();
+  const watching = c && live.isCameraLive?.() ? 'watching' : c ? 'local' : '';
   mic.classList.toggle('listening', m);
   cam?.classList.toggle('listening', c);
-  input.placeholder = m && c ? 'Suzy is listening and watching…' : m ? 'Suzy is listening…' : c ? 'Suzy is watching…' : 'What do you want to do?';
+  input.placeholder = m && c ? 'Suzy is listening and watching…' : m ? 'Suzy is listening…'
+    : watching === 'watching' ? 'Suzy is watching…' : watching ? 'Watching for gestures…' : 'What do you want to do?';
 }
 window.addEventListener('agentrix:mic', syncLiveUi);
 window.addEventListener('agentrix:camera', syncLiveUi);
+window.addEventListener('agentrix:camera-live', syncLiveUi);
+// Voice off (no key, or Gemini rejected it): the mic dictates through the browser and the
+// camera recognises gestures on this device; the titles say so.
+window.addEventListener('agentrix:voice-status', (e) => {
+  const d = e.detail || {};
+  mic.title = d.enabled ? 'Speak' : `Speak — browser dictation (${d.reason || "Suzy's voice is off"})`;
+  if (cam) cam.title = d.enabled ? 'Camera — Suzy watches for gestures' : 'Camera — gestures recognised on this device';
+});
 
 mic.addEventListener('click', async () => {
   const live = window.AgentrixLiveVoice;
-  if (live?.isMicActive?.()) {
+  if (live?.isMicActive?.() || live?.isMicStarting?.()) {
     live.stopMic();
     syncLiveUi();
     return;
@@ -1737,12 +1748,14 @@ mic.addEventListener('click', async () => {
       onTranscript: (t) => { if (t.trim()) input.value = t.trim(); },
     });
     syncLiveUi();
-    if (ok) return;
+    // Only a failed Live session falls back to browser dictation; a denied or missing
+    // microphone (already explained) or a stop while starting ends here.
+    if (ok || live.lastFailure?.() !== 'session') return;
   }
   startSpeechFallback();
 });
 
-// Camera (M10-T5): shown only when the server offers it; never in demo mode.
+// Camera (M10-T5): shown when the server offers gestures (AGENTRIX_CAMERA; no voice needed); never in demo mode.
 (async () => {
   if (!cam) return;
   if (window.__AGENTRIX_BOOT__) await window.__AGENTRIX_BOOT__;
@@ -1756,15 +1769,15 @@ mic.addEventListener('click', async () => {
 cam?.addEventListener('click', async () => {
   const live = window.AgentrixLiveVoice;
   if (!live?.isCameraEnabled?.()) return;
-  if (live.isCameraActive()) {
+  if (live.isCameraActive() || live.isCameraStarting?.()) {
     live.stopCamera();
     syncLiveUi();
     return;
   }
   cam.classList.add('listening');
-  input.placeholder = live.isMicActive?.() ? 'Suzy is listening and watching…' : 'Suzy is watching…';
+  input.placeholder = live.isMicActive?.() ? 'Suzy is listening and watching…' : 'Watching for gestures…';
   try { await live.startCamera({ sessionId: sessionStorage.getItem('agentrix_session_id') }); }
-  catch (e) { console.warn('camera unavailable:', e); }
+  catch (e) { window.__AGENTRIX_UI__?.showSuzyCustom?.('The camera could not start.'); console.warn('camera unavailable:', e); }
   syncLiveUi();
 });
 
@@ -2307,7 +2320,8 @@ function lightCaption(spans, live){
     const elapsed = (performance.now() - t0) / 1000;
     const queued = live.queuedSeconds?.() || 0;
     if (queued > 0) { heard = true; total = Math.max(total, elapsed + queued); }
-    if ((heard && queued <= 0) || elapsed > 20) { spans.forEach(s => s.classList.add('lit')); return; }
+    // Lit at once when the session ended before any audio (Gemini refused it): nothing is coming.
+    if ((heard && queued <= 0) || (!heard && !live.isActive?.()) || elapsed > 20) { spans.forEach(s => s.classList.add('lit')); return; }
     if (total > 0) {
       const n = Math.round(Math.min(1, elapsed / total) * spans.length);
       spans.forEach((s, i) => s.classList.toggle('lit', i < n));

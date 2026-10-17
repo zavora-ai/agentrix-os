@@ -3,6 +3,7 @@ use std::sync::Arc;
 use adk_runner::Runner;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::orchestrator::fallback;
 use crate::orchestrator::workflow::{stream_workflow, AgentSlot, WorkflowStreamConfig};
 use crate::state::SessionStore;
 
@@ -33,57 +34,43 @@ fn status_line(tool: &str) -> &'static str {
     }
 }
 
-fn team_resolve(text: &str) -> serde_json::Value {
-    let stub = text.contains("STUB");
-    serde_json::json!({
-        "big": if stub { "3 need replies (stub)" } else { "3 need replies" },
-        "sub": if stub { "Connect mcp-slack · Alex, Priya & #dev-team" } else { "Alex, Priya & #dev-team waiting" },
-        "actions": ["Draft replies", "Open"]
-    })
+/// Stub agents (no Slack / calendar / CRM) answer with a `[STUB — …]` label; their cards stay
+/// labeled stubs. Live agents' cards show the agent's own words, or "Unavailable" when it failed.
+fn is_stub(agent_text: &str) -> bool {
+    agent_text.contains("STUB")
 }
 
-fn priya_resolve(text: &str) -> serde_json::Value {
-    let stub = text.contains("STUB");
-    serde_json::json!({
-        "big": "1:1 at 3pm",
-        "sub": if stub { "STUB — connect calendar" } else { "2 open items from last week" },
-        "actions": ["Prep notes", "Reschedule"]
-    })
+fn team_resolve(agent_text: &str) -> serde_json::Value {
+    if is_stub(agent_text) {
+        return serde_json::json!({
+            "big": "3 need replies (stub)",
+            "sub": "STUB — connect mcp-slack · sample names, not your team",
+            "actions": ["Draft replies", "Open"]
+        });
+    }
+    fallback::lines_or_unavailable(agent_text, "Team channels returned nothing this time", &["Draft replies", "Open"])
 }
 
-fn connections_resolve(text: &str) -> serde_json::Value {
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(|l| format!("<b>•</b> {}", l.trim_start_matches('[').chars().take(72).collect::<String>()))
-        .collect();
-    let lines = if lines.is_empty() {
-        vec![
-            "<b>•</b> Reconnect: Dana (3 mo)".into(),
-            "<b>•</b> Intro promised to Sam".into(),
-            "<b>•</b> Birthday: Mara, Friday".into(),
-        ]
-    } else {
-        lines
-    };
-    serde_json::json!({
-        "lines": lines,
-        "actions": ["Send notes", "Snooze"]
-    })
+fn priya_resolve(agent_text: &str) -> serde_json::Value {
+    if is_stub(agent_text) {
+        return serde_json::json!({
+            "big": "1:1 at 3pm (stub)",
+            "sub": "STUB — connect calendar · sample meeting",
+            "actions": ["Prep notes", "Reschedule"]
+        });
+    }
+    fallback::lines_or_unavailable(agent_text, "1:1 notes returned nothing this time", &["Prep notes", "Reschedule"])
 }
 
-fn resolve(author: &str, tool_text: &str, agent_text: &str) -> serde_json::Value {
-    let combined = if agent_text.is_empty() {
-        tool_text.to_string()
-    } else {
-        format!("{tool_text}\n{agent_text}")
-    };
+fn connections_resolve(agent_text: &str) -> serde_json::Value {
+    fallback::lines_or_unavailable(agent_text, "Connections returned nothing this time", &["Send notes", "Snooze"])
+}
+
+fn resolve(author: &str, _tool_text: &str, agent_text: &str) -> serde_json::Value {
     match author {
-        "team_agent" => team_resolve(&combined),
-        "priya_agent" => priya_resolve(&combined),
-        "connections_agent" => connections_resolve(&combined),
+        "team_agent" => team_resolve(agent_text),
+        "priya_agent" => priya_resolve(agent_text),
+        "connections_agent" => connections_resolve(agent_text),
         _ => serde_json::json!({ "big": "Ready", "sub": "Done", "actions": ["Open"] }),
     }
 }
