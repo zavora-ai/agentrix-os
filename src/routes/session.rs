@@ -21,10 +21,19 @@ pub async fn create_session(
         .auth
         .as_ref()
         .and_then(|a| auth::extract_user_id(&headers, &a.jwt_secret));
-    let user_id = authenticated_user
-        .map(|u| u.to_string())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let record = create_ui_session(&state, authenticated_user.map(|u| u.to_string())).await;
 
+    Json(SessionResponse {
+        session_id: record.session_id,
+        user_id: record.user_id,
+        authenticated: authenticated_user.is_some(),
+    })
+}
+/// A new UI session for the signed-in user, or for a fresh anonymous id. Shared by
+/// `POST /api/sessions` and the voice websocket, so a session opened from voice belongs to the
+/// same user as one the page creates.
+pub async fn create_ui_session(state: &AppState, user_id: Option<String>) -> crate::state::SessionRecord {
+    let user_id = user_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let record = state.sessions.create_for_user(user_id).await;
 
     let _ = state
@@ -36,10 +45,5 @@ pub async fn create_session(
             state: Default::default(),
         })
         .await;
-
-    Json(SessionResponse {
-        session_id: record.session_id,
-        user_id: record.user_id,
-        authenticated: authenticated_user.is_some(),
-    })
+    record
 }

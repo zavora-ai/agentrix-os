@@ -4,6 +4,7 @@
 
 use axum::{
     extract::{Query, State, WebSocketUpgrade, ws},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };
@@ -16,24 +17,34 @@ use tracing::{debug, error, info, warn};
 use adk_realtime::events::ServerEvent;
 
 use crate::state::AppState;
+use crate::voice::health::{SessionEnd, classify_disconnect};
 
 #[derive(Serialize)]
 pub struct VoiceStatus {
+    /// A Live session can open: a key is configured and Gemini has not rejected it.
     pub enabled: bool,
+    /// Why voice is off, when it is (no key, or the key was rejected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub ws_path: &'static str,
     pub input_rate_hz: u32,
     pub output_rate_hz: u32,
     /// Camera channel available on this websocket (`AGENTRIX_CAMERA`, needs voice).
     pub camera: bool,
+    /// Camera button for local gesture detection in the browser (`AGENTRIX_CAMERA`; no voice needed).
+    pub gestures: bool,
 }
 
 pub async fn status(State(state): State<AppState>) -> Json<VoiceStatus> {
+    let enabled = state.voice.available();
     Json(VoiceStatus {
-        enabled: state.voice.enabled,
+        enabled,
+        reason: state.voice.unavailable_reason(),
         ws_path: "/ws/voice",
         input_rate_hz: crate::voice::realtime::INPUT_RATE_HZ,
         output_rate_hz: crate::voice::realtime::OUTPUT_RATE_HZ,
-        camera: state.voice.camera,
+        camera: enabled && state.voice.camera,
+        gestures: state.voice.gestures,
     })
 }
 
@@ -45,64 +56,93 @@ pub struct VoiceWsQuery {
 pub async fn ws_voice(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<VoiceWsQuery>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_voice_ws(socket, state, query.session_id))
+    let user = state
+        .auth
+        .as_ref()
+        .and_then(|a| crate::auth::extract_user_id(&headers, &a.jwt_secret))
+        .map(|u| u.to_string());
+    ws.on_upgrade(move |socket| handle_voice_ws(socket, state, query.session_id, user))
 }
 
-async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Option<String>) {
-    if !state.voice.enabled {
-        let mut socket = socket;
-        let _ = socket
-            .send(ws::Message::Text(
-                serde_json::json!({
-                    "type": "error",
-                    "message": "Voice unavailable — set GOOGLE_API_KEY"
-                })
-                .to_string()
-                .into(),
-            ))
-            .await;
+/// The UI session this voice session belongs to — the id the client keeps and submits intents
+/// with. The page's own session when it passes one that exists and is not someone else's
+/// (signed in: it must be the JWT user's); otherwise a new one for the JWT user, created the
+/// way `POST /api/sessions` does. A random owner here made wave → briefing and every later
+/// intent run as a stranger.
+pub async fn resolve_ui_session(state: &AppState, session_id: Option<&str>, user: Option<String>) -> String {
+    if let Some(sid) = session_id
+        && let Some(record) = state.sessions.get(sid).await
+        && user.as_deref().is_none_or(|u| u == record.user_id)
+    {
+        return record.session_id;
+    }
+    crate::routes::session::create_ui_session(state, user).await.session_id
+}
+
+/// Tell the client why there is no session, then close: `{type: "error", reason, message}`.
+async fn refuse<S>(sender: &mut S, reason: &str, message: &str)
+where
+    S: futures::Sink<ws::Message> + Unpin,
+{
+    let _ = sender.send(error_message(reason, message)).await;
+    let _ = sender.send(close_frame(1011, reason)).await;
+}
+
+fn error_message(reason: &str, message: &str) -> ws::Message {
+    ws::Message::Text(
+        serde_json::json!({"type": "error", "reason": reason, "message": message})
+            .to_string()
+            .into(),
+    )
+}
+
+fn close_frame(code: u16, reason: &str) -> ws::Message {
+    ws::Message::Close(Some(ws::CloseFrame { code, reason: reason.to_string().into() }))
+}
+
+async fn handle_voice_ws(
+    socket: ws::WebSocket,
+    state: AppState,
+    session_id: Option<String>,
+    user: Option<String>,
+) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    if let Some(why) = state.voice.unavailable_reason() {
+        refuse(&mut ws_sender, "voice_unavailable", &why).await;
         return;
     }
 
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    // Resolved before the runner is built, so Suzy's tools (submit_intent, session context)
+    // are bound to this session instead of minting one per call. The runner's own id is not a
+    // UI session: sending that as `session_id` made every intent raised from voice a 404.
+    let ui_session_id = resolve_ui_session(&state, session_id.as_deref(), user).await;
 
-    let runner = match crate::voice::realtime::build_suzy_runner(&state, session_id.clone()).await {
+    let runner = match crate::voice::realtime::build_suzy_runner(&state, Some(ui_session_id.clone())).await {
         Ok(r) => std::sync::Arc::new(r),
         Err(e) => {
             error!("voice runner init failed: {e:#}");
-            let _ = ws_sender
-                .send(ws::Message::Text(
-                    serde_json::json!({"type": "error", "message": format!("Init failed: {e}")})
-                        .to_string()
-                        .into(),
-                ))
-                .await;
+            refuse(&mut ws_sender, "init_failed", &format!("Voice could not start: {e}")).await;
             return;
         }
     };
 
     if let Err(e) = runner.connect().await {
         error!("Gemini Live connect failed: {e}");
-        let _ = ws_sender
-            .send(ws::Message::Text(
-                serde_json::json!({"type": "error", "message": format!("Connect failed: {e}")})
-                    .to_string()
-                    .into(),
-            ))
-            .await;
+        let end = classify_disconnect(None, &e.to_string());
+        if end.key_rejected() {
+            state.voice.mark_unavailable(end.message.clone());
+            refuse(&mut ws_sender, end.reason, &end.message).await;
+        } else {
+            refuse(&mut ws_sender, "connect_failed", &format!("Could not reach Gemini Live: {e}")).await;
+        }
         return;
     }
 
     info!("Gemini Live voice session connected");
-    // The UI session this voice session belongs to — the id the client keeps and submits intents
-    // with. The realtime runner has an id of its own that is not a UI session; sending that as
-    // `session_id` made every intent raised from voice (submit_intent, camera gestures) a 404.
-    let ui_session_id = match session_id.as_deref() {
-        Some(sid) if state.sessions.get(sid).await.is_some() => sid.to_string(),
-        _ => state.sessions.create().await.session_id,
-    };
     let _ = ws_sender
         .send(ws::Message::Text(
             serde_json::json!({
@@ -125,13 +165,19 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
     let runner_send = runner.clone();
     let mut frame_gate = crate::voice::camera::FrameGate::new(state.voice.camera);
     let tx_frames = tx.clone();
-    let send_handle = tokio::spawn(async move {
+    let tx_end = tx.clone();
+    // Each task ends with `Some(detail)` when the Gemini side failed, `None` when the client
+    // went away. A failed send used to be ignored, so the client kept an open socket to a
+    // session that no longer existed.
+    let mut send_handle = tokio::spawn(async move {
+        let mut gemini_failed: Option<String> = None;
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
                 ws::Message::Binary(data) => {
                     let audio_b64 =
                         base64::engine::general_purpose::STANDARD.encode(&data);
-                    if runner_send.send_audio(&audio_b64).await.is_err() {
+                    if let Err(e) = runner_send.send_audio(&audio_b64).await {
+                        gemini_failed = Some(e.to_string());
                         break;
                     }
                 }
@@ -141,7 +187,10 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                             Some("text") => {
                                 if let Some(content) = msg.get("content").and_then(|c| c.as_str())
                                 {
-                                    let _ = runner_send.send_text(content).await;
+                                    if let Err(e) = runner_send.send_text(content).await {
+                                        gemini_failed = Some(e.to_string());
+                                        break;
+                                    }
                                     let _ = runner_send.create_response().await;
                                 }
                             }
@@ -152,7 +201,10 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                                     && !content.trim().is_empty()
                                 {
                                     let prompt = crate::voice::realtime::read_aloud_prompt(content);
-                                    let _ = runner_send.send_text(&prompt).await;
+                                    if let Err(e) = runner_send.send_text(&prompt).await {
+                                        gemini_failed = Some(e.to_string());
+                                        break;
+                                    }
                                     let _ = runner_send.create_response().await;
                                 }
                             }
@@ -171,7 +223,8 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                                 let data = msg.get("data").and_then(|d| d.as_str()).unwrap_or("");
                                 match frame_gate.check(mime, data, std::time::Instant::now()) {
                                     Ok(()) => {
-                                        if runner_send.send_video_frame(mime, data).await.is_err() {
+                                        if let Err(e) = runner_send.send_video_frame(mime, data).await {
+                                            gemini_failed = Some(e.to_string());
                                             break;
                                         }
                                     }
@@ -199,10 +252,11 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
             tracing::debug!(accepted = frame_gate.accepted, rejected = frame_gate.rejected, "camera frames relayed");
         }
         debug!("voice: client stopped sending");
+        gemini_failed
     });
 
     let runner_recv = runner.clone();
-    let recv_handle = tokio::spawn(async move {
+    let mut recv_handle = tokio::spawn(async move {
         loop {
             match runner_recv.next_event().await {
                 Some(Ok(event)) => {
@@ -291,37 +345,69 @@ async fn handle_voice_ws(socket: ws::WebSocket, state: AppState, session_id: Opt
                         _ => None,
                     };
 
-                    if let Some(msg) = ws_msg {
-                        if tx.send(msg).await.is_err() {
-                            break;
-                        }
+                    if let Some(msg) = ws_msg
+                        && tx.send(msg).await.is_err()
+                    {
+                        return None;
                     }
                 }
                 Some(Err(e)) => {
                     warn!("Gemini voice stream error: {e}");
-                    break;
+                    return Some(e.to_string());
                 }
                 None => {
                     let reason = runner_recv.disconnect_reason().await;
                     debug!(?reason, "voice: Gemini event stream ended");
-                    break;
+                    return Some(String::new());
                 }
             }
         }
     });
 
-    let forward_handle = tokio::spawn(async move {
+    let mut forward_handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_sender.send(msg).await.is_err() {
+            let closing = matches!(msg, ws::Message::Close(_));
+            if ws_sender.send(msg).await.is_err() || closing {
                 break;
             }
         }
     });
 
-    tokio::select! {
-        _ = send_handle => debug!("voice session ending: client stopped sending"),
-        _ = recv_handle => debug!("voice session ending: Gemini stream ended"),
-        _ = forward_handle => debug!("voice session ending: client sink closed"),
+    let gemini_end = tokio::select! {
+        r = &mut send_handle => { debug!("voice session ending: client stopped sending"); r.ok().flatten() }
+        r = &mut recv_handle => { debug!("voice session ending: Gemini stream ended"); r.ok().flatten() }
+        _ = &mut forward_handle => { debug!("voice session ending: client sink closed"); None }
+    };
+
+    if let Some(detail) = gemini_end {
+        // A failed send can beat the close frame to us; give the event stream a moment to
+        // record why Gemini hung up before asking.
+        if !recv_handle.is_finished() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), &mut recv_handle).await;
+        }
+        let end: SessionEnd = match runner.disconnect_reason().await {
+            Some(d) => classify_disconnect(d.code, &d.reason),
+            None => classify_disconnect(None, &detail),
+        };
+        warn!(reason = end.reason, "voice: Gemini ended the live session");
+        if end.key_rejected() {
+            state.voice.mark_unavailable(end.message.clone());
+        }
+        let _ = tx_end.send(ws::Message::Text(end.to_json().to_string().into())).await;
+        let code = if end.reason == "session_limit" { 1000 } else { 1011 };
+        let _ = tx_end.send(close_frame(code, end.reason)).await;
+    }
+
+    // Stop both halves so neither keeps the client socket alive, then let the forwarder flush
+    // what is queued (the reason above) before it ends with the last sender.
+    send_handle.abort();
+    recv_handle.abort();
+    drop(tx_end);
+    // (A finished JoinHandle must not be polled again.)
+    if !forward_handle.is_finished()
+        && tokio::time::timeout(std::time::Duration::from_secs(2), &mut forward_handle).await.is_err()
+    {
+        forward_handle.abort();
     }
 
     let _ = runner.close().await;
