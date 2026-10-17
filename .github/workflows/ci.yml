@@ -74,8 +74,10 @@ jobs:
           consent_ tasks_ s7_
           work_agents work_stub_agents work_and_home_worlds home_agents bus_carries arbitration_
 
-      - name: gesture classifier (node)
-        run: node scripts/test-gesture-classifier.mjs
+      - name: web client tests (node)
+        run: |
+          node scripts/test-gesture-classifier.mjs
+          node scripts/test-live-voice.mjs
 
       - name: cargo test (live — optional secrets)
         if: env.GOOGLE_API_KEY != ''
