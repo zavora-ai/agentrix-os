@@ -3169,3 +3169,44 @@ async fn security_voice_ws_origin_and_dnd_capability() {
     let cap = ctx.capabilities.iter().find(|c| c.name == "set_dnd").expect("set_dnd capability");
     assert_eq!(cap.access_level, awp_types::TrustLevel::Known);
 }
+
+/// The dev ledger and memory keys are public (they are in the source), so Postgres mode refuses
+/// to boot without real ones; offline and demo boot keep the fallback.
+#[test]
+fn security_postgres_mode_requires_real_secrets() {
+    use spatial_os::config::require_secret;
+
+    common::load_env();
+    let mut config = AppConfig::from_env().expect("config");
+    let strong = || Some("k".repeat(spatial_os::config::MIN_SECRET_BYTES));
+    config.database_url = None;
+    config.jwt_secret = None;
+    config.ledger_hash_key = None;
+    config.memory_master_key = None;
+    config.check_secrets().expect("offline / demo boot keeps the dev fallback");
+
+    config.database_url = Some("postgres://localhost/agentrix".into());
+    let err = config.check_secrets().expect_err("dev keys must not guard real data").to_string();
+    assert!(err.contains("LEDGER_HASH_KEY"), "{err}");
+    config.ledger_hash_key = strong();
+    let err = config.check_secrets().expect_err("memory key missing").to_string();
+    assert!(err.contains("MEMORY_MASTER_KEY"), "{err}");
+    config.memory_master_key = Some("change-me-to-a-long-random-string".into());
+    assert!(config.check_secrets().is_err(), "the .env.example placeholder is refused");
+    config.memory_master_key = strong();
+    config.check_secrets().expect("real keys boot");
+
+    config.jwt_secret = Some("change-me-in-production".into());
+    assert!(config.check_secrets().is_err());
+    config.jwt_secret = Some("short-secret".into());
+    assert!(config.check_secrets().unwrap_err().to_string().contains("JWT_SECRET"));
+    config.database_url = None;
+    assert!(config.check_secrets().is_err(), "a short JWT secret lets anyone mint Known tokens, DB or not");
+    config.jwt_secret = strong();
+    config.check_secrets().expect("strong JWT secret");
+
+    assert!(require_secret("X", None).is_err());
+    assert!(require_secret("X", Some("   ")).is_err());
+    assert!(require_secret("X", Some(&"x".repeat(31))).is_err());
+    assert!(require_secret("X", Some(&"x".repeat(32))).is_ok());
+}

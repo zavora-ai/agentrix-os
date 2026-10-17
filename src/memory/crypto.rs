@@ -28,6 +28,8 @@ impl Crypto {
         Self { master }
     }
 
+    /// The development key is for in-memory runs only: with `DATABASE_URL` set, boot refuses a
+    /// missing or weak `MEMORY_MASTER_KEY` (`AppConfig::check_secrets`).
     pub fn from_env_or_dev() -> Self {
         let material = std::env::var("MEMORY_MASTER_KEY")
             .ok()

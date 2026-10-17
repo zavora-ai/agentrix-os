@@ -39,6 +39,10 @@ pub struct AppConfig {
     pub voice_language: Option<String>,
     pub database_url: Option<String>,
     pub jwt_secret: Option<String>,
+    /// `LEDGER_HASH_KEY`: HMAC key for ledger subject hashes. Required with `DATABASE_URL`.
+    pub ledger_hash_key: Option<String>,
+    /// `MEMORY_MASTER_KEY`: wraps the per-user memory keys. Required with `DATABASE_URL`.
+    pub memory_master_key: Option<String>,
     pub google_oauth_client_id: Option<String>,
     pub google_oauth_client_secret: Option<String>,
     pub base_url: String,
@@ -176,6 +180,8 @@ impl AppConfig {
             },
             database_url: std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty()),
             jwt_secret: std::env::var("JWT_SECRET").ok().filter(|s| !s.is_empty()),
+            ledger_hash_key: std::env::var("LEDGER_HASH_KEY").ok().filter(|s| !s.is_empty()),
+            memory_master_key: std::env::var("MEMORY_MASTER_KEY").ok().filter(|s| !s.is_empty()),
             google_oauth_client_id: std::env::var("GOOGLE_OAUTH_CLIENT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -266,6 +272,21 @@ impl AppConfig {
             .collect()
     }
 
+    /// Refuse to boot on secrets that would protect real data with public values: a `JWT_SECRET`
+    /// shorter than [`MIN_SECRET_BYTES`] (anyone could mint Known tokens), and in Postgres mode a
+    /// missing or weak `LEDGER_HASH_KEY` / `MEMORY_MASTER_KEY` (the dev fallbacks are in the source).
+    /// Without `DATABASE_URL` nothing persists, so the dev fallbacks stay for offline and demo boot.
+    pub fn check_secrets(&self) -> Result<()> {
+        if self.jwt_secret.is_some() {
+            require_secret("JWT_SECRET", self.jwt_secret.as_deref())?;
+        }
+        if self.database_url.is_some() {
+            require_secret("LEDGER_HASH_KEY", self.ledger_hash_key.as_deref())?;
+            require_secret("MEMORY_MASTER_KEY", self.memory_master_key.as_deref())?;
+        }
+        Ok(())
+    }
+
     pub fn postgres_enabled(&self) -> bool {
         self.database_url.is_some()
     }
@@ -298,6 +319,25 @@ impl AppConfig {
 
     pub fn voice_enabled(&self) -> bool {
         self.google_api_key.is_some()
+    }
+}
+
+/// Shortest accepted secret: 256 bits, the HMAC-SHA256 / AES-256 key size.
+pub const MIN_SECRET_BYTES: usize = 32;
+
+/// A secret that guards persisted data: set, at least [`MIN_SECRET_BYTES`] long, and not one of
+/// the `change-me…` placeholders from `.env.example`.
+pub fn require_secret(name: &str, value: Option<&str>) -> Result<()> {
+    const HOW: &str = "generate one with `openssl rand -base64 48`";
+    match value.map(str::trim) {
+        None | Some("") => anyhow::bail!("{name} must be set when DATABASE_URL is — {HOW}"),
+        Some(v) if v.starts_with("change-me") => {
+            anyhow::bail!("{name} is still the .env.example placeholder — {HOW}")
+        }
+        Some(v) if v.len() < MIN_SECRET_BYTES => {
+            anyhow::bail!("{name} must be at least {MIN_SECRET_BYTES} bytes — {HOW}")
+        }
+        Some(_) => Ok(()),
     }
 }
 
